@@ -1,0 +1,41 @@
+{
+  "_comment": "Triibe rate card — single source of truth for what we pitch. All values in cents (USD). Used by pricing.js + draft.openai.js + leads promote endpoint. Riley's quotes — Cooper $4k/reel, Charlie $4.5k/reel + breakdown.",
+
+  "cooper": {
+    "ig_reel_cents":     400000,
+    "ig_story_cents":    null,
+    "tiktok_cents":      null,
+    "ugc_cents":         null,
+    "floor_cents":       300000,
+    "_note": "Story rate TBD — Riley still figuring out. Floor is ~75% of standard."
+  },
+
+  "charlie": {
+    "ig_reel_cents":     450000,
+    "tiktok_cents":      250000,
+    "ig_story_cents":    150000,
+    "ugc_cents":         100000,
+    "floor_cents":       100000,
+    "_note": "Floor matches UGC rate — minimum acceptable Charlie deal."
+  },
+
+  "exclusivity_policy": {
+    "default_ask":      0,
+    "max_accept_days":  30,
+    "redline_over_days": 90,
+    "_note": "Push for zero. If brand insists, accept up to 30 days same-category. Surface anything 90+ as a redline for Riley to decide."
+  },
+
+  "recurring_policy": {
+    "strategy": "ask_then_test",
+    "ask_phrase": "Open to one-off, but love to explore a structured recurring partnership — say 3–6 months at X/mo. Worth running one as a test first?",
+    "fallback": "one_off_test_video",
+    "_note": "Ask at the start of every new pitch. If brand says no → run ONE test video → reassess. Don't push hard on first decline."
+  },
+
+  "payment_terms_policy": {
+    "default_ask": "net 30 from invoice",
+    "max_accept":  "net 60 (with redline flag)",
+    "redline":     "net 90+"
+  }
+}

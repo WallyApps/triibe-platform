@@ -1,0 +1,40 @@
+{
+  "_comment": "Maps the 26 messy legacy stages from deals.json onto the clean 6-lane funnel + lifecycle state. EDITABLE — change a mapping and re-run `npm run migrate`. funnel_stage: cold|conversation|pitching|in_works|active|completed. state: open|won|lost|dormant. Riley's rule: numbers involved => pitching; signed/contract => in_works; posted/awaiting pay => active; paid+done => completed; dead/passed => lost; paused/on_hold => dormant.",
+  "map": {
+    "intro_sent":                    { "funnel_stage": "cold",         "state": "open" },
+    "mediakit_sent":                 { "funnel_stage": "cold",         "state": "open" },
+    "agent_pitching":                { "funnel_stage": "cold",         "state": "open" },
+    "roster_sourcing":               { "funnel_stage": "cold",         "state": "open" },
+    "out_of_scope":                  { "funnel_stage": "cold",         "state": "lost" },
+
+    "brand_inbound":                 { "funnel_stage": "conversation", "state": "open" },
+    "awaiting_brand":                { "funnel_stage": "conversation", "state": "open" },
+    "discovery_call_scheduled":      { "funnel_stage": "conversation", "state": "open" },
+    "call_done":                     { "funnel_stage": "conversation", "state": "open" },
+    "gifting_offer":                 { "funnel_stage": "conversation", "state": "open" },
+    "program_offer":                 { "funnel_stage": "conversation", "state": "open" },
+    "handed_off":                    { "funnel_stage": "conversation", "state": "open" },
+
+    "rate_sent":                     { "funnel_stage": "pitching",     "state": "open" },
+    "negotiating":                   { "funnel_stage": "pitching",     "state": "open" },
+    "terms_agreed_pending_client":   { "funnel_stage": "pitching",     "state": "open" },
+    "passed_budget":                 { "funnel_stage": "pitching",     "state": "lost" },
+
+    "terms_agreed":                  { "funnel_stage": "in_works",     "state": "open" },
+    "signed":                        { "funnel_stage": "in_works",     "state": "won" },
+    "contract_signed":              { "funnel_stage": "in_works",     "state": "won" },
+    "contract_received":             { "funnel_stage": "in_works",     "state": "open" },
+    "in_revision":                   { "funnel_stage": "in_works",     "state": "open" },
+    "in_production":                 { "funnel_stage": "in_works",     "state": "open" },
+    "confirmed":                     { "funnel_stage": "in_works",     "state": "open" },
+    "at_risk":                       { "funnel_stage": "in_works",     "state": "open" },
+
+    "delivery_failed":               { "funnel_stage": "active",       "state": "lost" },
+
+    "paused_by_brand":               { "funnel_stage": "conversation", "state": "dormant" },
+    "on_hold":                       { "funnel_stage": "conversation", "state": "dormant" },
+
+    "dead":                          { "funnel_stage": "cold",         "state": "lost" }
+  },
+  "default": { "funnel_stage": "cold", "state": "open" }
+}

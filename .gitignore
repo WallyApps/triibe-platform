@@ -1,0 +1,39 @@
+# Local database (regenerable from migration)
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+
+# Secrets / API keys — NEVER commit
+.env
+.env.*
+config/secrets.json
+
+# Snapshot copy of live deals (private, transient, read-only mirror of ~/triibe-ops)
+migration/source/*.json
+
+# Contracts (private legal docs)
+contracts/*.pdf
+contracts/*.docx
+contracts/*.doc
+
+# OS / editor
+.DS_Store
+node_modules/
+*.log
+
+# Banking + payee details — NEVER commit
+config/payment_info.json
+
+# Gmail OAuth tokens — NEVER commit (contain refresh_token = full inbox access)
+credentials/
+credentials/*.json
+
+# whatsapp-web.js cache (browser HTML snapshots, regenerable)
+.wwebjs_cache/
+
+# whatsapp-web.js auth session (would also leak account, though we use bridge path now)
+.wwebjs_auth/
+
+# Migration tooling output
+cook_all.mjs.log

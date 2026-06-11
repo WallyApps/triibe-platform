@@ -1,0 +1,935 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Triibe Deal Desk — Mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --black:#0A0A0A; --black2:#121110; --card:#16140F; --card2:#1C1A14;
+    --cream:#F2E8D5; --cream-dim:rgba(242,232,213,.58); --cream-faint:rgba(242,232,213,.34);
+    --line:rgba(242,232,213,.10); --line2:rgba(242,232,213,.16);
+    --green:#7BC98A; --green-bg:rgba(123,201,138,.12);
+    --amber:#E2A94E; --amber-bg:rgba(226,169,78,.12);
+    --red:#E2635C; --red-bg:rgba(226,99,92,.13);
+    --blue:#7FA8D9; --blue-bg:rgba(127,168,217,.12);
+    --gold:#C9A65A;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{background:var(--black);color:var(--cream);font-family:'Manrope',system-ui,sans-serif;font-size:14px;-webkit-font-smoothing:antialiased}
+  ::-webkit-scrollbar{width:9px;height:9px}
+  ::-webkit-scrollbar-thumb{background:rgba(242,232,213,.14);border-radius:8px}
+  .serif{font-family:'DM Serif Display',serif;font-weight:400}
+  .app{display:grid;grid-template-columns:230px 1fr;height:100vh;overflow:hidden}
+
+  /* SIDEBAR */
+  .side{background:var(--black2);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:20px 14px}
+  .brand{display:flex;align-items:center;gap:11px;padding:6px 8px 20px}
+  .brand .mark{width:34px;height:34px;border-radius:9px;background:linear-gradient(135deg,var(--cream),var(--gold));color:#0A0A0A;display:grid;place-items:center;font-family:'DM Serif Display',serif;font-size:20px}
+  .brand h1{font-size:15px;letter-spacing:.04em;line-height:1}
+  .brand small{display:block;color:var(--cream-faint);font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;margin-top:3px}
+  .nav{display:flex;flex-direction:column;gap:2px;margin-top:6px}
+  .nav button{all:unset;cursor:pointer;display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:9px;color:var(--cream-dim);font-weight:600;font-size:13.5px;transition:.15s}
+  .nav button .ic{width:17px;text-align:center;opacity:.85}
+  .nav button:hover{background:var(--card);color:var(--cream)}
+  .nav button.active{background:var(--card2);color:var(--cream)}
+  .nav button.active .ic{opacity:1}
+  .nav .badge{margin-left:auto;font-size:10.5px;background:rgba(242,232,213,.12);color:var(--cream-dim);padding:1px 7px;border-radius:20px;font-weight:700}
+  .nav .badge.alert{background:var(--red-bg);color:var(--red)}
+  .side-foot{margin-top:auto;padding:12px 10px 2px;border-top:1px solid var(--line)}
+  .heartbeat{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--cream-dim)}
+  .pulse{width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(123,201,138,.6);animation:pulse 2s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(123,201,138,.5)}70%{box-shadow:0 0 0 7px rgba(123,201,138,0)}100%{box-shadow:0 0 0 0 rgba(123,201,138,0)}}
+  .heartbeat small{display:block;color:var(--cream-faint);font-size:10px;margin-top:3px;line-height:1.5}
+
+  /* MAIN */
+  .main{overflow-y:auto;padding:0}
+  .topbar{position:sticky;top:0;z-index:5;background:rgba(10,10,10,.82);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:16px 30px;display:flex;align-items:center;gap:18px}
+  .topbar .title{flex:1}
+  .topbar .title h2{font-size:20px;letter-spacing:.01em}
+  .topbar .title p{color:var(--cream-faint);font-size:12px;margin-top:2px}
+  .search{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:8px 13px;color:var(--cream-faint);font-size:12.5px;width:230px}
+  .switcher{display:flex;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:3px}
+  .switcher button{all:unset;cursor:pointer;padding:6px 14px;border-radius:7px;font-size:12.5px;font-weight:700;color:var(--cream-dim)}
+  .switcher button.on{background:var(--cream);color:#0A0A0A}
+  .sync-btn{background:linear-gradient(135deg,var(--cream),var(--gold));color:#0A0A0A;border:none;cursor:pointer;font-weight:800;font-size:12.5px;padding:9px 16px;border-radius:9px;letter-spacing:.01em}
+
+  .subnav{display:flex;gap:8px;padding:16px 30px 0;flex-wrap:wrap}
+  .subnav button{all:unset;cursor:pointer;font-size:12.5px;font-weight:700;color:var(--cream-dim);padding:8px 15px;border-radius:9px;background:var(--card);border:1px solid var(--line)}
+  .subnav button:hover{color:var(--cream)}
+  .subnav button.on{background:var(--cream);color:#0A0A0A;border-color:var(--cream)}
+  .subnav.hide{display:none}
+  .thfilter{display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap}
+  .thfilter button{all:unset;cursor:pointer;font-size:12px;font-weight:700;color:var(--cream-dim);padding:7px 13px;border-radius:8px;background:var(--card);border:1px solid var(--line)}
+  .thfilter button:hover{color:var(--cream)}
+  .thfilter button.on{background:var(--cream);color:#0A0A0A;border-color:var(--cream)}
+  .thfilter button.ready.on{background:var(--green);border-color:var(--green)}
+  .funnel{display:flex;gap:8px;margin:0 0 22px;flex-wrap:wrap}
+  .fstage{flex:1;min-width:120px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 14px;cursor:pointer}
+  .fstage:hover{border-color:var(--line2)}
+  .fstage .fl{font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--cream-faint);font-weight:700}
+  .fstage .fc{font-family:'DM Serif Display',serif;font-size:26px;line-height:1.1;margin-top:4px}
+  .fstage .fa{font-size:11px;font-weight:700;margin-top:5px}
+  .fstage .fa.amber{color:var(--amber)} .fstage .fa.red{color:var(--red)} .fstage .fa.blue{color:var(--blue)} .fstage .fa.ok{color:var(--cream-faint)}
+  .fstage.hot{border-color:rgba(226,99,92,.38)}
+  .board{display:flex;gap:13px;overflow-x:auto;padding-bottom:12px}
+  .col{flex:0 0 220px;background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:11px}
+  .col .colh{display:flex;align-items:center;gap:8px;margin-bottom:11px}
+  .col .colh b{font-size:12.5px}
+  .col .colh .cc{margin-left:auto;font-size:11px;font-weight:700;background:rgba(242,232,213,.08);color:var(--cream-dim);padding:1px 8px;border-radius:20px}
+  .dealcard{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:11px;margin-bottom:9px}
+  .dealcard .dh{display:flex;align-items:center;gap:7px}
+  .dealcard .dh b{font-size:13px}
+  .dealcard .df{margin-left:auto;font-family:'DM Serif Display',serif;font-size:14px}
+  .dealcard .ds{font-size:11px;color:var(--cream-faint);margin-top:6px}
+  .colmore{text-align:center;font-size:11.5px;color:var(--cream-faint);padding:6px;font-weight:700}
+  .page{padding:26px 30px 60px;display:none;animation:fade .25s}
+  .page.show{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .sec-h{display:flex;align-items:center;gap:10px;margin:26px 0 14px}
+  .sec-h:first-child{margin-top:0}
+  .sec-h h3{font-size:13px;letter-spacing:.13em;text-transform:uppercase;color:var(--cream-dim);font-weight:700}
+  .sec-h .ln{flex:1;height:1px;background:var(--line)}
+
+  /* KPI */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 18px 16px;position:relative;overflow:hidden}
+  .kpi .lab{font-size:11.5px;letter-spacing:.05em;color:var(--cream-faint);text-transform:uppercase;font-weight:700}
+  .kpi .val{font-size:34px;line-height:1.1;margin-top:9px}
+  .kpi .sub{font-size:12px;color:var(--cream-dim);margin-top:6px}
+  .kpi .tag{position:absolute;top:16px;right:16px;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px}
+  .kpi .tag.up{background:var(--green-bg);color:var(--green)}
+  .kpi .tag.warn{background:var(--amber-bg);color:var(--amber)}
+  .kpi.feat{background:linear-gradient(150deg,#1f1b12,#16140f);border-color:var(--line2)}
+  .kpi.feat .val{color:var(--gold)}
+
+  /* CARDS / GRID */
+  .grid2{display:grid;grid-template-columns:1.4fr 1fr;gap:16px}
+  .grid2b{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px}
+  .card .ch{display:flex;align-items:center;gap:10px;margin-bottom:14px}
+  .card .ch h4{font-size:14.5px}
+  .card .ch .count{font-size:11px;color:var(--cream-faint);background:rgba(242,232,213,.08);padding:2px 8px;border-radius:20px;font-weight:700}
+  .card .ch .more{margin-left:auto;color:var(--cream-faint);font-size:12px;cursor:pointer}
+
+  /* TODAY list */
+  .todo{display:flex;gap:12px;padding:13px 0;border-bottom:1px solid var(--line)}
+  .todo:last-child{border-bottom:none;padding-bottom:0}
+  .todo .dot{width:9px;height:9px;border-radius:50%;margin-top:5px;flex:none}
+  .dot.crit{background:var(--red)} .dot.high{background:var(--amber)} .dot.med{background:var(--blue)}
+  .todo .body{flex:1}
+  .todo .body .t{font-weight:600;font-size:13.5px}
+  .todo .body .m{color:var(--cream-dim);font-size:12.5px;margin-top:3px}
+  .todo .body .who{font-size:11px;color:var(--cream-faint);margin-top:5px}
+  .todo .act{align-self:center}
+  .mini{all:unset;cursor:pointer;font-size:11.5px;font-weight:700;padding:6px 12px;border-radius:8px;background:var(--cream);color:#0A0A0A}
+  .mini.ghost{background:transparent;border:1px solid var(--line2);color:var(--cream-dim)}
+
+  /* TABLE */
+  table{width:100%;border-collapse:collapse}
+  th{text-align:left;font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--cream-faint);font-weight:700;padding:0 14px 12px}
+  td{padding:13px 14px;border-top:1px solid var(--line);font-size:13px;vertical-align:middle}
+  tr:hover td{background:rgba(242,232,213,.03)}
+  .who-chip{display:inline-flex;align-items:center;gap:7px;font-weight:600}
+  .av{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800;color:#0A0A0A}
+  .av.c{background:#9fd0b0} .av.s{background:#e0b97a}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px;white-space:nowrap}
+  .pill.green{background:var(--green-bg);color:var(--green)}
+  .pill.amber{background:var(--amber-bg);color:var(--amber)}
+  .pill.red{background:var(--red-bg);color:var(--red)}
+  .pill.blue{background:var(--blue-bg);color:var(--blue)}
+  .pill.gray{background:rgba(242,232,213,.08);color:var(--cream-dim)}
+  .ball{font-size:11.5px;font-weight:700}
+  .ball.us{color:var(--amber)} .ball.them{color:var(--cream-faint)}
+  .ch-ic{font-size:13px;opacity:.8}
+  .money{font-family:'DM Serif Display',serif;font-size:16px}
+
+  /* SPLIT BAR */
+  .splitbar{height:13px;border-radius:8px;overflow:hidden;display:flex;margin:14px 0 10px}
+  .splitbar i{display:block;height:100%}
+  .legend{display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--cream-dim)}
+  .legend span{display:flex;align-items:center;gap:7px}
+  .swatch{width:11px;height:11px;border-radius:3px}
+
+  /* bars chart */
+  .bars{display:flex;align-items:flex-end;gap:14px;height:150px;padding-top:10px}
+  .bars .b{flex:1;display:flex;flex-direction:column;align-items:center;gap:8px;height:100%;justify-content:flex-end}
+  .bars .b .stack{width:60%;border-radius:7px 7px 0 0;display:flex;flex-direction:column-reverse;overflow:hidden}
+  .bars .b .stack i{display:block}
+  .bars .b small{font-size:11px;color:var(--cream-faint)}
+
+  /* contract / draft */
+  .terms{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;margin-top:4px}
+  .terms .t{background:var(--card2);padding:11px 13px}
+  .terms .t .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--cream-faint);font-weight:700}
+  .terms .t .v{font-size:13px;margin-top:4px;font-weight:600;display:flex;align-items:center;gap:7px}
+  .flag{display:flex;gap:11px;padding:11px 13px;border-radius:10px;margin-top:9px;align-items:flex-start}
+  .flag.red{background:var(--red-bg)} .flag.amber{background:var(--amber-bg)} .flag.green{background:var(--green-bg)}
+  .flag .fi{font-size:15px;margin-top:1px}
+  .flag .ft{font-size:12.5px;line-height:1.5}
+  .flag .ft b{font-weight:800}
+  .lifecycle{display:flex;align-items:center;gap:0;margin:16px 0 4px}
+  .lifecycle .st{flex:1;text-align:center;font-size:11px;font-weight:700;color:var(--cream-faint);position:relative;padding-top:22px}
+  .lifecycle .st::before{content:'';position:absolute;top:4px;left:50%;transform:translateX(-50%);width:13px;height:13px;border-radius:50%;background:var(--card2);border:2px solid var(--line2)}
+  .lifecycle .st::after{content:'';position:absolute;top:10px;left:50%;width:100%;height:2px;background:var(--line)}
+  .lifecycle .st:last-child::after{display:none}
+  .lifecycle .st.done{color:var(--green)} .lifecycle .st.done::before{background:var(--green);border-color:var(--green)}
+  .lifecycle .st.now{color:var(--gold)} .lifecycle .st.now::before{background:var(--gold);border-color:var(--gold);box-shadow:0 0 0 4px rgba(201,166,90,.18)}
+
+  .draftbox{background:var(--black);border:1px solid var(--line2);border-radius:11px;padding:16px;font-size:13.5px;line-height:1.65;color:var(--cream);white-space:pre-line}
+  .quote{border-left:2px solid var(--line2);padding:4px 0 4px 14px;color:var(--cream-dim);font-size:12.5px;margin-bottom:14px;line-height:1.55}
+  .draft-actions{display:flex;gap:10px;margin-top:14px;align-items:center;flex-wrap:wrap}
+  .btn{all:unset;cursor:pointer;font-weight:800;font-size:13px;padding:11px 18px;border-radius:10px}
+  .btn.go{background:var(--green);color:#08110a}
+  .btn.rew{background:transparent;border:1px solid var(--line2);color:var(--cream-dim)}
+  .btn.send{background:linear-gradient(135deg,var(--cream),var(--gold));color:#0A0A0A}
+  .noteline{flex:1;min-width:200px;display:flex;align-items:center;gap:9px;background:var(--black);border:1px solid var(--line);border-radius:10px;padding:9px 13px;color:var(--cream-faint);font-size:12.5px}
+  .voice{width:34px;height:34px;border-radius:50%;background:var(--red-bg);color:var(--red);display:grid;place-items:center;cursor:pointer;flex:none}
+
+  /* fulfillment checklist */
+  .ff{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid var(--line)}
+  .ff:last-child{border-bottom:none}
+  .check{width:21px;height:21px;border-radius:7px;flex:none;display:grid;place-items:center;font-size:12px;font-weight:800}
+  .check.on{background:var(--green);color:#08110a}
+  .check.off{border:1.5px solid var(--line2);color:transparent}
+  .ff .fl{flex:1}
+  .ff .fl .a{font-weight:600;font-size:13.5px}
+  .ff .fl .b{font-size:11.5px;color:var(--cream-faint);margin-top:2px}
+  .ring{font-size:11px;font-weight:800;padding:4px 11px;border-radius:20px}
+
+  /* calendar */
+  .cal{display:grid;grid-template-columns:repeat(7,1fr);gap:7px}
+  .cal .dow{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--cream-faint);text-align:center;font-weight:700;padding-bottom:4px}
+  .cal .day{background:var(--card2);border:1px solid var(--line);border-radius:9px;min-height:74px;padding:7px;font-size:11px}
+  .cal .day.out{opacity:.32}
+  .cal .day .n{color:var(--cream-faint);font-weight:700}
+  .cal .day.bo{background:repeating-linear-gradient(45deg,var(--card2),var(--card2) 6px,rgba(226,99,92,.07) 6px,rgba(226,99,92,.07) 12px)}
+  .ev{margin-top:5px;font-size:10px;font-weight:700;padding:3px 6px;border-radius:6px;line-height:1.3;display:block}
+  .ev.c{background:var(--green-bg);color:var(--green)} .ev.s{background:var(--blue-bg);color:var(--blue)}
+  .ev.clash{background:var(--red-bg);color:var(--red)} .ev.warn{background:var(--amber-bg);color:var(--amber)}
+
+  .alertbar{display:flex;align-items:center;gap:12px;background:var(--amber-bg);border:1px solid rgba(226,169,78,.3);border-radius:11px;padding:13px 16px;margin-bottom:18px;font-size:13px}
+  .alertbar.red{background:var(--red-bg);border-color:rgba(226,99,92,.3)}
+  .alertbar .x{margin-left:auto;font-weight:800;cursor:pointer}
+  .tip{font-size:11px;color:var(--cream-faint);margin-top:18px;text-align:center;letter-spacing:.02em}
+
+  /* Quick capture FAB + modal */
+  .fab{position:fixed;right:26px;bottom:26px;z-index:60;display:flex;align-items:center;gap:10px;background:var(--gold);color:#0A0A0A;border:none;border-radius:30px;padding:14px 20px 14px 16px;font-family:'Manrope',sans-serif;font-weight:800;font-size:13.5px;cursor:pointer;box-shadow:0 8px 28px rgba(0,0,0,.45),0 0 0 1px rgba(201,166,90,.4)}
+  .fab:hover{filter:brightness(1.06)}
+  .fab .mic{width:22px;height:22px;display:grid;place-items:center;font-size:15px}
+  .qc-back{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.55);backdrop-filter:blur(3px);display:none;align-items:flex-end;justify-content:center}
+  .qc-back.open{display:flex}
+  .qc{width:min(560px,94vw);background:var(--card);border:1px solid var(--line2);border-radius:18px 18px 14px 14px;margin-bottom:22px;padding:20px;box-shadow:0 -10px 40px rgba(0,0,0,.5)}
+  .qc h4{font-size:15px;margin:0 0 3px}
+  .qc .sub{font-size:12px;color:var(--cream-faint);margin-bottom:15px}
+  .qc .inrow{display:flex;align-items:center;gap:10px;background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:6px 6px 6px 14px}
+  .qc .inrow input{flex:1;background:none;border:none;outline:none;color:var(--cream);font-family:'Manrope',sans-serif;font-size:14px;padding:8px 0}
+  .qc .inrow input::placeholder{color:var(--cream-faint)}
+  .qc .micbtn{width:42px;height:42px;border-radius:50%;border:none;cursor:pointer;background:var(--gold);color:#0A0A0A;font-size:18px;display:grid;place-items:center}
+  .qc .micbtn.rec{background:var(--red);color:#fff;animation:pulse 1.1s infinite}
+  @keyframes pulse{0%,100%{box-shadow:0 0 0 0 rgba(226,99,92,.5)}50%{box-shadow:0 0 0 9px rgba(226,99,92,0)}}
+  .qc .sendbtn{height:42px;padding:0 16px;border-radius:21px;border:none;cursor:pointer;background:var(--cream);color:#0A0A0A;font-weight:800;font-size:13px}
+  .qc .exlab{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--cream-faint);font-weight:700;margin:16px 0 8px}
+  .qc .chips{display:flex;flex-wrap:wrap;gap:7px}
+  .qc .chips button{background:var(--card2);border:1px solid var(--line);color:var(--cream-dim);border-radius:20px;padding:7px 12px;font-size:12px;cursor:pointer;font-family:'Manrope',sans-serif}
+  .qc .chips button:hover{border-color:var(--line2);color:var(--cream)}
+  .qc-result{margin-top:16px;border-top:1px solid var(--line);padding-top:15px;display:none}
+  .qc-result.show{display:block}
+  .qc-result .rl{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--cream-faint);font-weight:700;margin-bottom:9px}
+  .qc-card{background:var(--card2);border:1px solid var(--line2);border-radius:12px;padding:14px}
+  .qc-card .qct{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .qc-card .qct .ic{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;font-size:14px;background:var(--gold);color:#0A0A0A}
+  .qc-card .qct b{font-size:13.5px}
+  .qc-card .qct .tag{margin-left:auto;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.04em;color:var(--green);background:var(--green-bg);padding:2px 8px;border-radius:20px}
+  .qc-card .qcbody{font-size:12.5px;color:var(--cream-dim);line-height:1.5}
+  .qc-card .qcbody .draftbox{background:var(--card);border:1px solid var(--line);border-radius:9px;padding:11px;margin-top:9px;font-size:12.5px;color:var(--cream);line-height:1.55;white-space:pre-line}
+  .qc-card .qcact{display:flex;gap:8px;margin-top:12px}
+  .qc-card .qcact button{flex:1;border-radius:9px;padding:9px;font-weight:800;font-size:12.5px;cursor:pointer;border:1px solid var(--line2);background:var(--card);color:var(--cream)}
+  .qc-card .qcact button.go{background:var(--gold);color:#0A0A0A;border-color:var(--gold)}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="side">
+    <div class="brand">
+      <div class="mark serif">T</div>
+      <div><h1>TRIIBE</h1><small>deal desk</small></div>
+    </div>
+    <nav class="nav" id="nav">
+      <button data-g="today" class="active"><span class="ic">◉</span> Today</button>
+      <button data-g="threads"><span class="ic">✉</span> Threads <span class="badge">23</span></button>
+      <button data-g="money"><span class="ic">$</span> Money</button>
+      <button data-g="calendar"><span class="ic">▤</span> Calendar</button>
+    </nav>
+    <div class="side-foot">
+      <div class="heartbeat">
+        <span class="pulse"></span>
+        <div><b>Autopilot live</b><small>📧 Gmail IDLE · 💬 WhatsApp ok<br>last event 2m ago</small></div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+    <div class="topbar">
+      <div class="title">
+        <h2 id="ptitle">Overview</h2>
+        <p id="psub">Everything that needs you, right now — Thu, Jun 4 2026</p>
+      </div>
+      <div class="search">🔎 Search deals, brands…</div>
+      <div class="switcher">
+        <button class="on">All</button><button>Cooper</button><button>Charlie</button>
+      </div>
+      <button class="sync-btn">↻ Sync now</button>
+    </div>
+
+    <div class="subnav hide" id="subnav"></div>
+
+    <!-- OVERVIEW -->
+    <section class="page show" id="overview">
+      <div class="kpis">
+        <div class="kpi feat">
+          <div class="lab">Your take · June</div>
+          <div class="val serif">$3,140</div>
+          <div class="sub">10% of $31,400 booked</div>
+          <div class="tag up">▲ 22%</div>
+        </div>
+        <div class="kpi">
+          <div class="lab">Booked · June</div>
+          <div class="val serif">$31,400</div>
+          <div class="sub">9 signed deals</div>
+          <div class="tag up">▲ 18%</div>
+        </div>
+        <div class="kpi">
+          <div class="lab">Collected</div>
+          <div class="val serif">$14,300</div>
+          <div class="sub">paid & cleared</div>
+        </div>
+        <div class="kpi">
+          <div class="lab">Outstanding</div>
+          <div class="val serif">$17,100</div>
+          <div class="sub">5 invoices owed</div>
+          <div class="tag warn">2 aging</div>
+        </div>
+      </div>
+
+      <div class="sec-h"><h3>Pipeline health</h3><div class="ln"></div><span class="count">133 deals · 22 need you</span></div>
+      <div class="funnel">
+        <div class="fstage" onclick="openGroup('today');showPage('pipeline')"><div class="fl">Cold</div><div class="fc">81</div><div class="fa amber">14 to follow up</div></div>
+        <div class="fstage" onclick="openGroup('today');showPage('pipeline')"><div class="fl">Conversation</div><div class="fc">18</div><div class="fa blue">5 your move</div></div>
+        <div class="fstage hot" onclick="openGroup('today');showPage('pipeline')"><div class="fl">Pitching</div><div class="fc">11</div><div class="fa red">5 your move</div></div>
+        <div class="fstage" onclick="openGroup('today');showPage('pipeline')"><div class="fl">In the works</div><div class="fc">7</div><div class="fa blue">2 contracts</div></div>
+        <div class="fstage" onclick="openGroup('today');showPage('pipeline')"><div class="fl">Active</div><div class="fc">9</div><div class="fa amber">3 usage expiring</div></div>
+        <div class="fstage" onclick="openGroup('today');showPage('pipeline')"><div class="fl">Completed</div><div class="fc">34</div><div class="fa ok">3 to re-engage</div></div>
+      </div>
+
+      <div class="sec-h"><h3>Today — needs you</h3><div class="ln"></div></div>
+      <div class="grid2">
+        <div class="card">
+          <div class="ch"><h4>Action queue</h4><span class="count">7 items</span></div>
+          <div class="todo">
+            <span class="dot crit"></span>
+            <div class="body"><div class="t">Garmin countered Charlie at $4,000 — below your $6,500 anchor</div>
+              <div class="m">Suggested counter ready: $5,800 + 30-day usage. Cross-rep leverage (4 reps active).</div>
+              <div class="who">💬 brand replied 14m ago · ball in your court</div></div>
+            <div class="act"><button class="mini">Review</button></div>
+          </div>
+          <div class="todo">
+            <span class="dot crit"></span>
+            <div class="body"><div class="t">YETI contract needs vetting before Charlie signs</div>
+              <div class="m">2 red-line flags: 120-day exclusivity, net-60 terms.</div>
+              <div class="who">📧 contract received 1h ago</div></div>
+            <div class="act"><button class="mini">Open</button></div>
+          </div>
+          <div class="todo">
+            <span class="dot high"></span>
+            <div class="body"><div class="t">Draft ready — Higgsfield × Cooper counter</div>
+              <div class="m">Cooked at $2,500. Tap to approve & send, or voice-note a fix.</div>
+              <div class="who">✎ auto-drafted · waiting on you</div></div>
+            <div class="act"><button class="mini">Approve</button></div>
+          </div>
+          <div class="todo">
+            <span class="dot high"></span>
+            <div class="body"><div class="t">Skywork invoice is day 28 of net-30</div>
+              <div class="m">$2,000 — auto-nudge goes out in 2 days if unpaid.</div>
+              <div class="who">$ awaiting payment · Cooper</div></div>
+            <div class="act"><button class="mini ghost">Nudge now</button></div>
+          </div>
+          <div class="todo">
+            <span class="dot med"></span>
+            <div class="body"><div class="t">Dexnor usage rights expire in 9 days</div>
+              <div class="m">Re-quote opportunity — renew at +$1,500 or let lapse.</div>
+              <div class="who">✓ posted Apr 28 · Charlie</div></div>
+            <div class="act"><button class="mini ghost">Re-quote</button></div>
+          </div>
+          <div class="todo">
+            <span class="dot med"></span>
+            <div class="body"><div class="t">Predis.ai — 6 reps detected for Cooper</div>
+              <div class="m">Merged to one deal. Highest offer: $3,000 (JeevMedia).</div>
+              <div class="who">⚠ dedupe · review merge</div></div>
+            <div class="act"><button class="mini ghost">View</button></div>
+          </div>
+          <div class="todo">
+            <span class="dot med"></span>
+            <div class="body"><div class="t">Higgsfield is fast on email — offer to move to WhatsApp</div>
+              <div class="m">Deals close quicker on chat. Ask cooked: "happy to move to WhatsApp if easier — what's the best number?"</div>
+              <div class="who">📧 email-only · suggest channel switch</div></div>
+            <div class="act"><button class="mini">Send ask</button></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="ch"><h4>This month's split</h4><span class="count">$31,400 booked</span></div>
+          <div class="splitbar">
+            <i style="width:80%;background:#9fd0b0"></i>
+            <i style="width:10%;background:var(--gold)"></i>
+            <i style="width:10%;background:#7FA8D9"></i>
+          </div>
+          <div class="legend">
+            <span><i class="swatch" style="background:#9fd0b0"></i> Creators · $25,120</span>
+            <span><i class="swatch" style="background:var(--gold)"></i> You (10%) · $3,140</span>
+            <span><i class="swatch" style="background:#7FA8D9"></i> Triibe house · $3,140</span>
+          </div>
+          <div class="ch" style="margin-top:22px"><h4>Booked by creator</h4></div>
+          <div class="bars">
+            <div class="b"><div class="stack" style="height:62%"><i style="height:80%;background:#9fd0b0"></i><i style="height:10%;background:var(--gold)"></i><i style="height:10%;background:#7FA8D9"></i></div><small>Cooper · $13.3k</small></div>
+            <div class="b"><div class="stack" style="height:90%"><i style="height:80%;background:#e0b97a"></i><i style="height:10%;background:var(--gold)"></i><i style="height:10%;background:#7FA8D9"></i></div><small>Charlie · $18.1k</small></div>
+            <div class="b"><div class="stack" style="height:44%"><i style="height:100%;background:rgba(242,232,213,.18)"></i></div><small>May · $26k</small></div>
+            <div class="b"><div class="stack" style="height:34%"><i style="height:100%;background:rgba(242,232,213,.18)"></i></div><small>Apr · $19k</small></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- PIPELINE -->
+    <section class="page" id="pipeline">
+      <div class="kpis">
+        <div class="kpi"><div class="lab">Active deals</div><div class="val serif">52</div><div class="sub">+ 81 cold intros</div></div>
+        <div class="kpi"><div class="lab">In negotiation</div><div class="val serif">11</div><div class="sub">ball in your court: 5</div></div>
+        <div class="kpi"><div class="lab">Signed this mo.</div><div class="val serif">9</div><div class="sub">$31.4k booked</div></div>
+        <div class="kpi"><div class="lab">Avg deal</div><div class="val serif">$3,489</div><div class="sub">↑ from $2,950</div></div>
+      </div>
+      <div class="sec-h"><h3>Funnel board</h3><div class="ln"></div><span class="count">drag-to-stage in build</span></div>
+      <div class="board">
+        <div class="col">
+          <div class="colh"><b>Cold</b><span class="cc">81</span></div>
+          <div class="dealcard"><div class="dh"><b>Notion</b><span class="df">—</span></div><div class="ds"><span class="av c">C</span> Cooper · ai_saas · no reply 6d</div></div>
+          <div class="dealcard"><div class="dh"><b>Patagonia</b><span class="df">—</span></div><div class="ds"><span class="av s">C</span> Charlie · outdoor · follow up due</div></div>
+          <div class="dealcard"><div class="dh"><b>Loom</b><span class="df">—</span></div><div class="ds"><span class="av c">C</span> Cooper · ai_saas · intro sent</div></div>
+          <div class="colmore">+ 78 more · 14 to follow up</div>
+        </div>
+        <div class="col">
+          <div class="colh"><b>Conversation</b><span class="cc">18</span></div>
+          <div class="dealcard"><div class="dh"><b>Wulcea</b><span class="df">—</span></div><div class="ds"><span class="av s">C</span> Charlie · 💬 replied · talking terms</div></div>
+          <div class="dealcard"><div class="dh"><b>MiniMax</b><span class="df">—</span></div><div class="ds"><span class="av c">C</span> Cooper · 💬 active chat</div></div>
+          <div class="colmore">+ 16 more · 5 your move</div>
+        </div>
+        <div class="col">
+          <div class="colh"><b>Pitching</b><span class="cc">11</span></div>
+          <div class="dealcard"><div class="dh"><b>Garmin</b><span class="df">$6.5k</span></div><div class="ds"><span class="av s">C</span> Charlie · countered $4k · ✎ draft</div></div>
+          <div class="dealcard"><div class="dh"><b>Predis.ai</b><span class="df">$3k</span></div><div class="ds"><span class="av c">C</span> Cooper · 6→1 merged · ✎ draft</div></div>
+          <div class="dealcard"><div class="dh"><b>Higgsfield</b><span class="df">$2.5k</span></div><div class="ds"><span class="av c">C</span> Cooper · ✎ draft ready</div></div>
+          <div class="colmore">+ 8 more · 5 your move</div>
+        </div>
+        <div class="col">
+          <div class="colh"><b>In the works</b><span class="cc">7</span></div>
+          <div class="dealcard"><div class="dh"><b>YETI</b><span class="df">$5k</span></div><div class="ds"><span class="av s">C</span> Charlie · contract · ⚠ 2 redlines</div></div>
+          <div class="dealcard"><div class="dh"><b>Helinox</b><span class="df">$4.5k</span></div><div class="ds"><span class="av s">C</span> Charlie · verbal yes · ⚠ perpetual</div></div>
+          <div class="colmore">+ 5 more · 2 contracts to vet</div>
+        </div>
+        <div class="col">
+          <div class="colh"><b>Active</b><span class="cc">9</span></div>
+          <div class="dealcard"><div class="dh"><b>Dexnor</b><span class="df">$4.5k</span></div><div class="ds"><span class="av s">C</span> Charlie · ✓ posted · usage 9d</div></div>
+          <div class="dealcard"><div class="dh"><b>Skywork</b><span class="df">$2k</span></div><div class="ds"><span class="av c">C</span> Cooper · ✓ posted · net-30 d28</div></div>
+          <div class="colmore">+ 7 more · 3 usage expiring</div>
+        </div>
+        <div class="col">
+          <div class="colh"><b>Completed</b><span class="cc">34</span></div>
+          <div class="dealcard"><div class="dh"><b>DJI Osmo</b><span class="df">$3.2k</span></div><div class="ds"><span class="av s">C</span> Charlie · paid · re-engage?</div></div>
+          <div class="dealcard"><div class="dh"><b>Rocket.new</b><span class="df">$2k</span></div><div class="ds"><span class="av c">C</span> Cooper · paid & closed</div></div>
+          <div class="colmore">+ 32 more · 3 to re-engage</div>
+        </div>
+      </div>
+
+      <div class="sec-h"><h3>List view</h3><div class="ln"></div></div>
+      <div class="card" style="padding:8px 4px">
+        <table>
+          <thead><tr><th>Brand</th><th>Creator</th><th>Stage</th><th>Fee</th><th>Category</th><th>Ball</th><th>Ch</th><th>Flags</th></tr></thead>
+          <tbody>
+            <tr><td><b>Garmin</b></td><td><span class="who-chip"><span class="av s">C</span>Charlie</span></td><td><span class="pill amber">Negotiating</span></td><td class="money">$6,500</td><td>outdoor</td><td><span class="ball us">● you</span></td><td><span class="ch-ic">💬</span></td><td><span class="pill gray">4 reps</span></td></tr>
+            <tr><td><b>YETI</b></td><td><span class="who-chip"><span class="av s">C</span>Charlie</span></td><td><span class="pill blue">Contract review</span></td><td class="money">$5,000</td><td>outdoor</td><td><span class="ball us">● you</span></td><td><span class="ch-ic">📧</span></td><td><span class="pill red">2 redlines</span></td></tr>
+            <tr><td><b>Dexnor</b></td><td><span class="who-chip"><span class="av s">C</span>Charlie</span></td><td><span class="pill green">Posted</span></td><td class="money">$4,500</td><td>outdoor</td><td><span class="ball them">brand</span></td><td><span class="ch-ic">📧</span></td><td><span class="pill amber">usage 9d</span></td></tr>
+            <tr><td><b>Helinox</b></td><td><span class="who-chip"><span class="av s">C</span>Charlie</span></td><td><span class="pill amber">Negotiating</span></td><td class="money">$4,500</td><td>outdoor</td><td><span class="ball us">● you</span></td><td><span class="ch-ic">📧</span></td><td><span class="pill red">perpetual</span></td></tr>
+            <tr><td><b>Wulcea</b></td><td><span class="who-chip"><span class="av s">C</span>Charlie</span></td><td><span class="pill blue">Verbal yes</span></td><td class="money">$3,500</td><td>outdoor</td><td><span class="ball them">brand</span></td><td><span class="ch-ic">💬</span></td><td></td></tr>
+            <tr><td><b>Predis.ai</b></td><td><span class="who-chip"><span class="av c">C</span>Cooper</span></td><td><span class="pill amber">Negotiating</span></td><td class="money">$3,000</td><td>ai_saas</td><td><span class="ball us">● you</span></td><td><span class="ch-ic">📧</span></td><td><span class="pill gray">6→1 merged</span></td></tr>
+            <tr><td><b>Higgsfield</b></td><td><span class="who-chip"><span class="av c">C</span>Cooper</span></td><td><span class="pill blue">Draft ready</span></td><td class="money">$2,500</td><td>ai_saas</td><td><span class="ball us">● you</span></td><td><span class="ch-ic">📧</span></td><td></td></tr>
+            <tr><td><b>Skywork</b></td><td><span class="who-chip"><span class="av c">C</span>Cooper</span></td><td><span class="pill green">Awaiting pay</span></td><td class="money">$2,000</td><td>ai_saas</td><td><span class="ball them">brand</span></td><td><span class="ch-ic">📧</span></td><td><span class="pill amber">net-30 d28</span></td></tr>
+            <tr><td><b>MiniMax</b></td><td><span class="who-chip"><span class="av c">C</span>Cooper</span></td><td><span class="pill amber">Negotiating</span></td><td class="money">$1,800</td><td>ai_saas</td><td><span class="ball them">brand</span></td><td><span class="ch-ic">💬</span></td><td><span class="pill red">3d spacing</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- THREADS -->
+    <section class="page" id="threads">
+      <div class="alertbar"><span>✨</span><div><b>Your 20-second catch-up.</b> 23 active threads · <b style="color:var(--amber)">5 need you</b> · 3 waiting on brands · <b style="color:var(--red)">1 going stale</b>. Filter by channel or jump to drafts that are ready to send.</div></div>
+      <div class="thfilter" id="thfilter">
+        <button class="on" data-f="all">All · 8</button>
+        <button data-f="email">📧 Gmail · 6</button>
+        <button data-f="wa">💬 WhatsApp · 2</button>
+        <button class="ready" data-f="ready">⚡ Reply ready · 4</button>
+      </div>
+      <div class="card" id="threadlist" style="padding:6px 0">
+        <div class="todo" style="padding:14px 18px" data-ch="email" data-ready="1">
+          <span class="av s">C</span>
+          <div class="body"><div class="t">Garmin <span class="ch-ic">📧</span> <span class="pill amber" style="margin-left:4px">you owe reply</span> <span class="pill green" style="margin-left:4px">✎ draft ready</span></div>
+            <div class="m">“We love Charlie but our ceiling for a single Reel is $4,000. Can we make that work this month?” — Chandler · 14m ago</div>
+            <div class="who">⚡ Countered $2,500 under your anchor — $5,800 counter cooked, cross-rep leverage noted</div></div>
+          <div class="act"><button class="mini">Open draft</button></div>
+        </div>
+        <div class="todo" style="padding:14px 18px" data-ch="email" data-ready="0">
+          <span class="av s">C</span>
+          <div class="body"><div class="t">YETI <span class="ch-ic">📧</span> <span class="pill red" style="margin-left:4px">you owe reply</span></div>
+            <div class="m">“Attached is the agreement — let us know if any questions.” — Priya · 1h ago · 📎 PDF</div>
+            <div class="who">⚡ Contract has 2 red lines: 120-day exclusivity + net-60. Vet before Charlie signs</div></div>
+          <div class="act"><button class="mini">Review</button></div>
+        </div>
+        <div class="todo" style="padding:14px 18px" data-ch="email" data-ready="1">
+          <span class="av c">C</span>
+          <div class="body"><div class="t">Higgsfield <span class="ch-ic">📧</span> <span class="pill amber" style="margin-left:4px">you owe reply</span> <span class="pill green" style="margin-left:4px">✎ draft ready</span></div>
+            <div class="m">“Saw Cooper's AI content — would love a paid collab. What are his rates?” — Maya · 2h ago</div>
+            <div class="who">⚡ Fresh inbound, good fit. Opening quote drafted at $2,500</div></div>
+          <div class="act"><button class="mini">Open draft</button></div>
+        </div>
+        <div class="todo" style="padding:14px 18px" data-ch="wa" data-ready="0">
+          <span class="av c">C</span>
+          <div class="body"><div class="t">MiniMax <span class="ch-ic">💬</span> <span class="pill gray" style="margin-left:4px">waiting on brand</span></div>
+            <div class="m">“Let me check with the team on $1,800 and circle back today 🙏” — Keyshe · 3h ago</div>
+            <div class="who">⚡ Ball with them. Moved to WhatsApp yesterday — moving faster since</div></div>
+          <div class="act"><button class="mini ghost">View</button></div>
+        </div>
+        <div class="todo" style="padding:14px 18px" data-ch="email" data-ready="1">
+          <span class="av c">C</span>
+          <div class="body"><div class="t">Predis.ai <span class="ch-ic">📧</span> <span class="pill amber" style="margin-left:4px">you owe reply</span> <span class="pill green" style="margin-left:4px">✎ draft ready</span></div>
+            <div class="m">“Following up — can we lock Cooper for next week?” — Volha, MediaCube · 5h ago</div>
+            <div class="who">⚡ 6 reps merged to one. Highest offer $3,000 (JeevMedia). Counter drafted</div></div>
+          <div class="act"><button class="mini">Open draft</button></div>
+        </div>
+        <div class="todo" style="padding:14px 18px" data-ch="wa" data-ready="0">
+          <span class="av s">C</span>
+          <div class="body"><div class="t">Wulcea <span class="ch-ic">💬</span> <span class="pill gray" style="margin-left:4px">waiting on brand</span></div>
+            <div class="m">“Amazing, sending the contract over shortly!” — Lena · yesterday</div>
+            <div class="who">⚡ Verbal yes at $3,500. Awaiting their paperwork — clean terms expected</div></div>
+          <div class="act"><button class="mini ghost">View</button></div>
+        </div>
+        <div class="todo" style="padding:14px 18px" data-ch="email" data-ready="1">
+          <span class="av c">C</span>
+          <div class="body"><div class="t">Skywork <span class="ch-ic">📧</span> <span class="pill red" style="margin-left:4px">going stale</span> <span class="pill green" style="margin-left:4px">✎ draft ready</span></div>
+            <div class="m">“Invoice received, processing.” — Accounts · 6 days ago</div>
+            <div class="who">⚡ Day 28 of net-30, $2,000. Payment-nudge drafted, ready to send</div></div>
+          <div class="act"><button class="mini">Open draft</button></div>
+        </div>
+        <div class="todo" style="padding:14px 18px" data-ch="email" data-ready="0">
+          <span class="av s">C</span>
+          <div class="body"><div class="t">Dexnor <span class="ch-ic">📧</span> <span class="pill gray" style="margin-left:4px">waiting on brand</span></div>
+            <div class="m">“Reel looks incredible, thank you! 🔥” — Marco · 4 days ago</div>
+            <div class="who">⚡ Delivered & paid. Usage rights expire in 9 days — re-quote opportunity at +$1,500</div></div>
+          <div class="act"><button class="mini ghost">Re-quote</button></div>
+        </div>
+      </div>
+      <div class="tip">📧 Gmail and 💬 WhatsApp side by side. “✎ draft ready” = a reply is cooked and waiting on your tap. Filter to <b>Reply ready</b> to clear them fast.</div>
+    </section>
+
+    <!-- DRAFTS -->
+    <section class="page" id="drafts">
+      <div class="alertbar"><span>✎</span><div><b>4 drafts cooked and waiting.</b> Nothing sends without your tap — review, approve, or voice-note a rewrite.</div></div>
+      <div class="grid2b">
+        <div class="card">
+          <div class="ch"><span class="av s">C</span><h4>Garmin × Charlie</h4><span class="pill amber" style="margin-left:auto">counter</span></div>
+          <div class="quote">“We love Charlie but our ceiling for a single Reel is <b>$4,000</b>. Can we make that work for a posting this month?” — Chandler, Garmin · 14m ago</div>
+          <div class="draftbox">Hey Chandler,
+
+Appreciate the transparency on budget — honestly Charlie feels very aligned with Garmin and we'd love to make this land.
+
+$4,000 for a dedicated Reel is under where we've been landing his outdoor placements, especially with the audience he pulls (306K IG / 233K TikTok). We've got another outdoor brand at $5,800 for the same window, so to prioritize Garmin I can come back at <b>$5,800</b> with a 30-day link in bio included.
+
+Happy to find middle ground — if there's flex to $5,500+ we can lock the posting window this week.
+
+Best,
+Riley Wallack
+Triibe Talents</div>
+          <div class="draft-actions">
+            <button class="btn go">✓ Approve & send</button>
+            <button class="btn rew">↺ Rewrite</button>
+          </div>
+          <div class="draft-actions">
+            <div class="noteline">🎙️ Hold to voice-note a fix, or type…</div>
+            <div class="voice">●</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="ch"><span class="av c">C</span><h4>Higgsfield × Cooper</h4><span class="pill blue" style="margin-left:auto">opening quote</span></div>
+          <div class="quote">“Hey! Saw Cooper's AI content — would love to explore a paid collab. What are his rates?” — Maya, Higgsfield · 2h ago</div>
+          <div class="draftbox">Hi Maya,
+
+Appreciate you reaching out — Cooper's AI/SaaS content honestly performs really well and Higgsfield feels like a strong fit.
+
+For a dedicated IG Reel (organic) we're at <b>$2,500</b>, which includes a 7-day link in bio. If you'd want to repurpose to TikTok/YouTube we can package that at $4,000.
+
+Before we lock deliverables, happy to take a look at the brief so I can tailor the concept. Looking forward to hearing your thoughts.
+
+Best,
+Riley Wallack
+Triibe Talents</div>
+          <div class="draft-actions">
+            <button class="btn go">✓ Approve & send</button>
+            <button class="btn rew">↺ Rewrite</button>
+          </div>
+          <div class="draft-actions">
+            <div class="noteline">🎙️ Hold to voice-note a fix, or type…</div>
+            <div class="voice">●</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="ch"><span class="av c">C</span><h4>MiniMax × Cooper</h4><span class="pill green" style="margin-left:auto">→ move to WhatsApp</span></div>
+          <div class="quote">3 fast back-and-forths on email today. Chat usually closes these quicker — offer to move the conversation over.</div>
+          <div class="draftbox">Hey Keyshe,
+
+Appreciate how quick you've been on this — honestly we're close. If it's easier, happy to keep this moving over WhatsApp so we can lock the details faster.
+
+What's the best number? Totally fine to stay on email too, whatever's easiest for you.
+
+Best,
+Riley Wallack
+Triibe Talents</div>
+          <div class="draft-actions">
+            <button class="btn go">✓ Approve & send</button>
+            <button class="btn rew">↺ Rewrite</button>
+          </div>
+          <div class="flag green" style="margin-top:14px"><span class="fi">💬</span><div class="ft"><b>When they reply with a number</b>, the deal flips to the WhatsApp channel automatically, adds a click-to-chat link, and reconcile starts tracking the chat. <span style="color:var(--cream-faint)">WhatsApp replies then send one-tap via the bridge — human-paced, active chats only, with a kill switch.</span></div></div>
+        </div>
+      </div>
+      <div class="tip">Approve creates the Gmail draft threaded to the latest message — never mid-thread, never auto-sent.</div>
+    </section>
+
+    <!-- CONTRACTS -->
+    <section class="page" id="contracts">
+      <div class="alertbar red"><span>⚠</span><div><b>YETI contract has 2 red-line flags.</b> Per your playbook, contracts never auto-approve — review, then forward to Charlie to sign.</div></div>
+      <div class="grid2">
+        <div class="card">
+          <div class="ch"><span class="av s">C</span><h4>YETI — Influencer Agreement</h4><span class="pill blue" style="margin-left:auto">📎 YETI_Charlie_v2.pdf</span></div>
+          <div class="terms">
+            <div class="t"><div class="k">Rate</div><div class="v">$5,000 <span class="pill green">matches agreed</span></div></div>
+            <div class="t"><div class="k">Deliverables</div><div class="v">1 IG Reel + 30-day bio link</div></div>
+            <div class="t"><div class="k">Usage rights</div><div class="v">30-day organic <span class="pill green">ok</span></div></div>
+            <div class="t"><div class="k">Exclusivity</div><div class="v">120 days <span class="pill red">&gt; 90</span></div></div>
+            <div class="t"><div class="k">Payment</div><div class="v">Net-60 <span class="pill amber">slow</span></div></div>
+            <div class="t"><div class="k">Posting window</div><div class="v">Jun 20 – Jul 5</div></div>
+          </div>
+          <div class="flag red"><span class="fi">🔴</span><div class="ft"><b>Exclusivity 120 days</b> exceeds your 90-day red line. Push to 60 days (+50%) or decline the exclusivity clause.</div></div>
+          <div class="flag amber"><span class="fi">🟡</span><div class="ft"><b>Net-60 payment.</b> Playbook says add a 5% premium or counter to net-30 before signing.</div></div>
+          <div class="flag green"><span class="fi">✅</span><div class="ft"><b>Rate, deliverables & usage</b> all match the agreed terms.</div></div>
+          <div class="lifecycle">
+            <div class="st done">Received</div>
+            <div class="st now">You vet</div>
+            <div class="st">Sent to Charlie</div>
+            <div class="st">Signed</div>
+            <div class="st">Invoiced</div>
+          </div>
+          <div class="draft-actions">
+            <button class="btn rew">↺ Draft pushback</button>
+            <button class="btn send">→ Forward to Charlie</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="ch"><span class="av s">C</span><h4>Wulcea — Agreement</h4><span class="pill green" style="margin-left:auto">looks clean</span></div>
+          <div class="terms">
+            <div class="t"><div class="k">Rate</div><div class="v">$3,500 <span class="pill green">ok</span></div></div>
+            <div class="t"><div class="k">Deliverables</div><div class="v">1 Reel + 1 Story</div></div>
+            <div class="t"><div class="k">Usage rights</div><div class="v">30-day organic <span class="pill green">ok</span></div></div>
+            <div class="t"><div class="k">Exclusivity</div><div class="v">None <span class="pill green">ideal</span></div></div>
+            <div class="t"><div class="k">Payment</div><div class="v">Net-30 <span class="pill green">ok</span></div></div>
+            <div class="t"><div class="k">Posting window</div><div class="v">Jun 15 – Jun 22</div></div>
+          </div>
+          <div class="flag green"><span class="fi">✅</span><div class="ft"><b>No red lines.</b> All terms match what you negotiated. Safe to forward to Charlie.</div></div>
+          <div class="lifecycle">
+            <div class="st done">Received</div>
+            <div class="st done">You vet</div>
+            <div class="st now">Sent to Charlie</div>
+            <div class="st">Signed</div>
+            <div class="st">Invoiced</div>
+          </div>
+          <div class="draft-actions">
+            <button class="btn send">→ Resend to Charlie</button>
+            <button class="btn rew">View PDF</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- REVENUE -->
+    <section class="page" id="revenue">
+      <div class="kpis">
+        <div class="kpi feat"><div class="lab">Your take · YTD</div><div class="val serif">$14,860</div><div class="sub">10% of agency revenue</div></div>
+        <div class="kpi"><div class="lab">Booked · YTD</div><div class="val serif">$148,600</div><div class="sub">42 signed deals</div></div>
+        <div class="kpi"><div class="lab">Collected</div><div class="val serif">$118,200</div><div class="sub">79% collection rate</div></div>
+        <div class="kpi"><div class="lab">Outstanding</div><div class="val serif">$30,400</div><div class="sub">over 5 invoices</div><div class="tag warn">2 aging</div></div>
+      </div>
+
+      <div class="sec-h"><h3>Where the money goes</h3><div class="ln"></div></div>
+      <div class="grid2">
+        <div class="card">
+          <div class="ch"><h4>Revenue split · YTD</h4><span class="count">$148,600 booked</span></div>
+          <div class="splitbar">
+            <i style="width:80%;background:#9fd0b0"></i><i style="width:10%;background:var(--gold)"></i><i style="width:10%;background:#7FA8D9"></i>
+          </div>
+          <div class="legend">
+            <span><i class="swatch" style="background:#9fd0b0"></i> Creators (80%) · $118,880</span>
+            <span><i class="swatch" style="background:var(--gold)"></i> You (10%) · $14,860</span>
+            <span><i class="swatch" style="background:#7FA8D9"></i> Triibe house (10%) · $14,860</span>
+          </div>
+          <div class="ch" style="margin-top:24px"><h4>Monthly booked</h4></div>
+          <div class="bars">
+            <div class="b"><div class="stack" style="height:50%"><i style="height:100%;background:rgba(242,232,213,.18)"></i></div><small>Mar</small></div>
+            <div class="b"><div class="stack" style="height:46%"><i style="height:100%;background:rgba(242,232,213,.18)"></i></div><small>Apr</small></div>
+            <div class="b"><div class="stack" style="height:64%"><i style="height:100%;background:rgba(242,232,213,.18)"></i></div><small>May</small></div>
+            <div class="b"><div class="stack" style="height:78%"><i style="height:80%;background:#9fd0b0"></i><i style="height:10%;background:var(--gold)"></i><i style="height:10%;background:#7FA8D9"></i></div><small>Jun</small></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="ch"><h4>Invoices — owed</h4><span class="count">$30,400</span></div>
+          <table>
+            <thead><tr><th>Brand</th><th>Amt</th><th>Age</th><th>Status</th></tr></thead>
+            <tbody>
+              <tr><td>Skywork</td><td class="money" style="font-size:14px">$2,000</td><td>28d</td><td><span class="pill amber">net-30 due</span></td></tr>
+              <tr><td>Garmin (May)</td><td class="money" style="font-size:14px">$6,500</td><td>41d</td><td><span class="pill red">overdue</span></td></tr>
+              <tr><td>Helinox</td><td class="money" style="font-size:14px">$4,500</td><td>12d</td><td><span class="pill green">on track</span></td></tr>
+              <tr><td>Dexnor</td><td class="money" style="font-size:14px">$4,500</td><td>18d</td><td><span class="pill green">on track</span></td></tr>
+              <tr><td>Quo (Apr)</td><td class="money" style="font-size:14px">$2,900</td><td>58d</td><td><span class="pill red">escalate</span></td></tr>
+            </tbody>
+          </table>
+          <div class="ch" style="margin-top:20px"><h4>Recently collected</h4></div>
+          <table>
+            <tbody>
+              <tr><td>YETI (May)</td><td class="money" style="font-size:14px">$5,000</td><td colspan="2"><span class="pill green">paid · Jun 1</span></td></tr>
+              <tr><td>Wulcea</td><td class="money" style="font-size:14px">$3,500</td><td colspan="2"><span class="pill green">paid · May 29</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- FULFILLMENT -->
+    <section class="page" id="fulfillment">
+      <div class="alertbar"><span>✓</span><div><b>Track every signed deal to the finish line</b> — content approval, go-live, link-in-bio, and usage-rights expiry so nothing slips after signature.</div></div>
+      <div class="grid2b">
+        <div class="card">
+          <div class="ch"><span class="av s">C</span><h4>Dexnor × Charlie</h4><span class="ring amber" style="margin-left:auto;background:var(--amber-bg);color:var(--amber)">usage expires 9d</span></div>
+          <div class="ff"><div class="check on">✓</div><div class="fl"><div class="a">Content submitted to brand</div><div class="b">sent Apr 24</div></div></div>
+          <div class="ff"><div class="check on">✓</div><div class="fl"><div class="a">Brand approved content</div><div class="b">approved Apr 26</div></div></div>
+          <div class="ff"><div class="check on">✓</div><div class="fl"><div class="a">Posted live</div><div class="b">Reel live Apr 28 · 312K views</div></div></div>
+          <div class="ff"><div class="check on">✓</div><div class="fl"><div class="a">Link in bio added (30 days)</div><div class="b">live through Jun 13</div></div></div>
+          <div class="ff"><div class="check off"></div><div class="fl"><div class="a">Usage rights renewal</div><div class="b">expires Jun 13 — re-quote at +$1,500?</div></div><button class="mini ghost">Re-quote</button></div>
+        </div>
+        <div class="card">
+          <div class="ch"><span class="av c">C</span><h4>Skywork × Cooper</h4><span class="ring" style="margin-left:auto;background:var(--green-bg);color:var(--green)">delivered</span></div>
+          <div class="ff"><div class="check on">✓</div><div class="fl"><div class="a">Content submitted to brand</div><div class="b">sent May 12</div></div></div>
+          <div class="ff"><div class="check on">✓</div><div class="fl"><div class="a">Brand approved content</div><div class="b">approved May 14</div></div></div>
+          <div class="ff"><div class="check on">✓</div><div class="fl"><div class="a">Posted live</div><div class="b">Reel live May 16 · 88K views</div></div></div>
+          <div class="ff"><div class="check on">✓</div><div class="fl"><div class="a">Link in bio (7 days)</div><div class="b">completed May 23</div></div></div>
+          <div class="ff"><div class="check off"></div><div class="fl"><div class="a">Payment received</div><div class="b">invoice day 28 of net-30 — nudge in 2d</div></div><button class="mini ghost">Nudge</button></div>
+        </div>
+        <div class="card">
+          <div class="ch"><span class="av s">C</span><h4>Wulcea × Charlie</h4><span class="ring" style="margin-left:auto;background:var(--blue-bg);color:var(--blue)">in production</span></div>
+          <div class="ff"><div class="check on">✓</div><div class="fl"><div class="a">Contract signed</div><div class="b">Jun 2</div></div></div>
+          <div class="ff"><div class="check off"></div><div class="fl"><div class="a">Content submitted to brand</div><div class="b">due Jun 12</div></div></div>
+          <div class="ff"><div class="check off"></div><div class="fl"><div class="a">Brand approval</div><div class="b">—</div></div></div>
+          <div class="ff"><div class="check off"></div><div class="fl"><div class="a">Posted live</div><div class="b">window Jun 15–22</div></div></div>
+          <div class="ff"><div class="check off"></div><div class="fl"><div class="a">Story add-on</div><div class="b">included</div></div></div>
+        </div>
+        <div class="card">
+          <div class="ch"><span class="av c">C</span><h4>MiniMax × Cooper</h4><span class="ring" style="margin-left:auto;background:rgba(242,232,213,.08);color:var(--cream-dim)">pre-sign</span></div>
+          <div class="ff"><div class="check off"></div><div class="fl"><div class="a">Terms agreed</div><div class="b">negotiating on WhatsApp</div></div></div>
+          <div class="ff"><div class="check off"></div><div class="fl"><div class="a">Contract sent</div><div class="b">—</div></div></div>
+          <div class="ff"><div class="check off"></div><div class="fl"><div class="a">Signed</div><div class="b">—</div></div></div>
+          <div class="ff"><div class="check off"></div><div class="fl"><div class="a">Posted live</div><div class="b">—</div></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CALENDAR -->
+    <section class="page" id="calendar">
+      <div class="alertbar"><span>▤</span><div><b>June 2026.</b> 🟥 hard block (exclusivity) · 🟧 warning (3-day AI spacing / ±7-day category) · ▦ blackout window. Warnings never block money — they keep you in tune with the schedule.</div></div>
+      <div class="card">
+        <div class="cal">
+          <div class="dow">Mon</div><div class="dow">Tue</div><div class="dow">Wed</div><div class="dow">Thu</div><div class="dow">Fri</div><div class="dow">Sat</div><div class="dow">Sun</div>
+          <div class="day"><div class="n">1</div></div>
+          <div class="day"><div class="n">2</div><span class="ev s">Wulcea signed</span></div>
+          <div class="day"><div class="n">3</div></div>
+          <div class="day"><div class="n">4</div><span class="ev warn">today</span></div>
+          <div class="day"><div class="n">5</div></div>
+          <div class="day out"><div class="n">6</div></div>
+          <div class="day out"><div class="n">7</div></div>
+          <div class="day"><div class="n">8</div></div>
+          <div class="day"><div class="n">9</div></div>
+          <div class="day"><div class="n">10</div><span class="ev c">MiniMax · AI</span></div>
+          <div class="day"><div class="n">11</div></div>
+          <div class="day"><div class="n">12</div><span class="ev c clash">Predis · AI</span><span class="ev warn">3d spacing ⚠</span></div>
+          <div class="day"><div class="n">13</div><span class="ev s">Dexnor usage ends</span></div>
+          <div class="day out"><div class="n">14</div></div>
+          <div class="day"><div class="n">15</div><span class="ev s">Wulcea Reel</span></div>
+          <div class="day"><div class="n">16</div></div>
+          <div class="day"><div class="n">17</div></div>
+          <div class="day bo"><div class="n">18</div><span class="ev">▦ Charlie OOO</span></div>
+          <div class="day bo"><div class="n">19</div><span class="ev">▦ Charlie OOO</span></div>
+          <div class="day"><div class="n">20</div><span class="ev s">YETI Reel</span></div>
+          <div class="day out"><div class="n">21</div></div>
+          <div class="day"><div class="n">22</div><span class="ev s">Helinox · outdoor</span></div>
+          <div class="day"><div class="n">23</div></div>
+          <div class="day"><div class="n">24</div><span class="ev s clash">Garmin · outdoor</span><span class="ev warn">±7d category ⚠</span></div>
+          <div class="day"><div class="n">25</div></div>
+          <div class="day"><div class="n">26</div></div>
+          <div class="day"><div class="n">27</div></div>
+          <div class="day out"><div class="n">28</div></div>
+          <div class="day"><div class="n">29</div><span class="ev c">Higgsfield · AI</span></div>
+          <div class="day"><div class="n">30</div></div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- QUICK CAPTURE -->
+<button class="fab" id="fab"><span class="mic">🎙</span> Tell the desk</button>
+<div class="qc-back" id="qcback">
+  <div class="qc">
+    <h4>Tell the desk anything</h4>
+    <div class="sub">Voice or type. It figures out what you mean and does it — logs money, drafts a message, updates a deal, sets a reminder.</div>
+    <div class="inrow">
+      <button class="micbtn" id="qcmic">🎙</button>
+      <input id="qcinput" placeholder="“Garmin paid the $6,500 invoice” …">
+      <button class="sendbtn" id="qcsend">Go</button>
+    </div>
+    <div class="exlab">Try saying</div>
+    <div class="chips" id="qcchips">
+      <button data-ex="pay">💰 Garmin paid the $6,500</button>
+      <button data-ex="text">💬 Text Charlie the YETI shoot is Friday 9am</button>
+      <button data-ex="note">📝 Helinox wants perpetual usage, flag it</button>
+      <button data-ex="remind">⏰ Remind me to chase Skywork invoice Monday</button>
+    </div>
+    <div class="qc-result" id="qcresult"></div>
+  </div>
+</div>
+
+<script>
+  const groups = {
+    today:{t:["Today","Everything that needs you — Thu, Jun 4 2026"],pages:[["overview","Overview"],["pipeline","Pipeline"],["drafts","Drafts · 4"],["contracts","Contracts · 2"]]},
+    threads:{t:["Threads","Every conversation, latest message + where it stands — skip Gmail & WhatsApp"],pages:[["threads","Threads"]]},
+    money:{t:["Money","Booked, collected, your cut & fulfillment"],pages:[["revenue","Revenue"],["fulfillment","Fulfillment"]]},
+    calendar:{t:["Calendar","Posting schedule + live clash engine"],pages:[["calendar","Calendar"]]}
+  };
+  const nav=document.getElementById('nav'), subnav=document.getElementById('subnav');
+  function showPage(id){
+    document.querySelectorAll('.page').forEach(s=>s.classList.toggle('show',s.id===id));
+    document.querySelector('.main').scrollTo({top:0,behavior:'smooth'});
+  }
+  function openGroup(g){
+    const grp=groups[g];
+    [...nav.children].forEach(b=>b.classList.toggle('active',b.dataset.g===g));
+    document.getElementById('ptitle').textContent=grp.t[0];
+    document.getElementById('psub').textContent=grp.t[1];
+    if(grp.pages.length>1){
+      subnav.classList.remove('hide'); subnav.innerHTML='';
+      grp.pages.forEach((p,i)=>{
+        const b=document.createElement('button'); b.textContent=p[1];
+        b.onclick=()=>{[...subnav.children].forEach(x=>x.classList.remove('on')); b.classList.add('on'); showPage(p[0]);};
+        if(i===0) b.classList.add('on');
+        subnav.appendChild(b);
+      });
+    } else { subnav.classList.add('hide'); subnav.innerHTML=''; }
+    showPage(grp.pages[0][0]);
+  }
+  nav.addEventListener('click',e=>{const b=e.target.closest('button'); if(!b)return; openGroup(b.dataset.g);});
+  document.querySelectorAll('.switcher button').forEach(b=>b.addEventListener('click',()=>{
+    document.querySelectorAll('.switcher button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
+  }));
+  const thf=document.getElementById('thfilter');
+  if(thf){thf.addEventListener('click',e=>{
+    const b=e.target.closest('button'); if(!b)return;
+    [...thf.children].forEach(x=>x.classList.remove('on')); b.classList.add('on');
+    const f=b.dataset.f;
+    document.querySelectorAll('#threadlist .todo').forEach(r=>{
+      const show = f==='all' || (f==='ready' ? r.dataset.ready==='1' : r.dataset.ch===f);
+      r.style.display = show ? '' : 'none';
+    });
+  });}
+  openGroup('today');
+
+  // ---- Quick capture (mockup intent demo) ----
+  const qcback=document.getElementById('qcback'), qcinput=document.getElementById('qcinput'),
+        qcresult=document.getElementById('qcresult'), qcmic=document.getElementById('qcmic');
+  const openQC=()=>{qcback.classList.add('open');qcresult.classList.remove('show');setTimeout(()=>qcinput.focus(),50);};
+  const closeQC=()=>{qcback.classList.remove('open');qcmic.classList.remove('rec');};
+  document.getElementById('fab').onclick=openQC;
+  qcback.onclick=e=>{if(e.target===qcback)closeQC();};
+  qcmic.onclick=()=>{ // fake "listening" then transcribe a sample
+    qcmic.classList.add('rec'); qcinput.placeholder='Listening…';
+    setTimeout(()=>{qcmic.classList.remove('rec');qcinput.placeholder='“Garmin paid the $6,500 invoice” …';
+      qcinput.value='Garmin paid the 6500 invoice and Charlie can post the reel Friday';
+      route(qcinput.value);},1600);
+  };
+  const examples={
+    pay:'Garmin paid the $6,500',
+    text:'Text Charlie the YETI shoot is Friday 9am',
+    note:'Helinox wants perpetual usage, flag it',
+    remind:'Remind me to chase Skywork invoice Monday'
+  };
+  document.getElementById('qcchips').addEventListener('click',e=>{
+    const b=e.target.closest('button'); if(!b)return;
+    qcinput.value=examples[b.dataset.ex]; route(qcinput.value);
+  });
+  document.getElementById('qcsend').onclick=()=>route(qcinput.value);
+  qcinput.addEventListener('keydown',e=>{if(e.key==='Enter')route(qcinput.value);});
+
+  function route(txt){
+    if(!txt.trim())return; const t=txt.toLowerCase(); let r;
+    if(/paid|collected|payment|sent the money|invoice.*paid|deposit/.test(t)){
+      r={ic:'💰',title:'Log payment · Garmin',tag:'Money',
+        body:'Marks the <b>$6,500</b> Garmin invoice <b>paid</b> → moves to Collected, updates your 10% cut (<b>+$650</b>) and Triibe house split. Charlie notified.',
+        act:['Edit','Confirm & log']};
+    } else if(/^text|message|tell|dm|whatsapp|let .* know/.test(t)){
+      r={ic:'💬',title:'Message Charlie · WhatsApp',tag:'Draft',
+        body:'Drafted on the active YETI chat — review before it sends:',
+        draft:'Hey Charlie — YETI shoot is locked for Friday 9am. I’ll send the brief tonight. Shout if anything clashes 🤙',
+        act:['Rewrite','Approve & send']};
+    } else if(/flag|usage|perpetual|exclusiv|redline|red line|risk/.test(t)){
+      r={ic:'🚩',title:'Flag deal · Helinox',tag:'Note',
+        body:'Adds a <b>red-line flag</b> “perpetual usage requested” to Helinox, bumps it to <b>your move</b>, and queues a counter at 2–3× base per your playbook.',
+        act:['Dismiss','Add flag']};
+    } else if(/remind|chase|follow up|nudge|monday|tomorrow|next week/.test(t)){
+      r={ic:'⏰',title:'Reminder · Skywork invoice',tag:'Reminder',
+        body:'Sets a reminder for <b>Mon Jun 8</b> to chase the Skywork $2,000 invoice. Auto-nudge stays armed if it ages past net-30.',
+        act:['Change date','Set reminder']};
+    } else {
+      r={ic:'✨',title:'Got it',tag:'Note',
+        body:'Logged as a note. In the real build this routes to the right deal — payments, messages, flags, reminders, stage changes.',
+        act:['Edit','Save']};
+    }
+    qcresult.innerHTML='<div class="rl">Here’s what I’ll do</div>'+
+      '<div class="qc-card"><div class="qct"><span class="ic">'+r.ic+'</span><b>'+r.title+'</b><span class="tag">'+r.tag+'</span></div>'+
+      '<div class="qcbody">'+r.body+(r.draft?'<div class="draftbox">'+r.draft+'</div>':'')+'</div>'+
+      '<div class="qcact"><button>'+r.act[0]+'</button><button class="go">'+r.act[1]+'</button></div></div>';
+    qcresult.classList.add('show');
+    qcresult.querySelectorAll('.qcact button').forEach((b,i)=>b.onclick=()=>{ if(i===1) closeQC(); });
+  }
+</script>
+</body>
+</html>

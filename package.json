@@ -1,0 +1,27 @@
+{
+  "name": "triibe-platform",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Triibe Talents deal desk — live, self-updating brand-partnership platform for Cooper & Charlie",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "migrate": "node db/migrate.js",
+    "dev": "node server/index.js",
+    "reset-db": "rm -f data/triibe.db && node db/init.js && node db/migrate.js",
+    "gmail-auth": "node tools/gmail-auth.js",
+    "wa-sync": "node tools/wa-sync.js",
+    "wa-poll": "node tools/wa-sync.js --daemon",
+    "wa-daemon": "node whatsapp-daemon/daemon.cjs"
+  },
+  "comment": "Free/local spine uses ZERO npm deps (node:sqlite + node:http, built into Node 22+). Paid providers (OpenAI, Gmail, Supabase) get added later behind swappable interfaces in server/providers/.",
+  "dependencies": {
+    "googleapis": "^173.0.0",
+    "mammoth": "^1.12.0",
+    "pdf-parse": "^2.4.5",
+    "qrcode-terminal": "^0.12.0",
+    "whatsapp-web.js": "^1.34.7"
+  }
+}

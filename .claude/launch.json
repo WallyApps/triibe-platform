@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "triibe-platform",
+      "runtimeExecutable": "echo",
+      "runtimeArgs": ["already running via launchd"],
+      "port": 4744
+    }
+  ]
+}
