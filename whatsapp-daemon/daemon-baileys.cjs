@@ -32,6 +32,9 @@ const {
   useMultiFileAuthState,
   fetchLatestBaileysVersion,
   Browsers,
+  downloadMediaMessage,
+  getContentType,
+  isJidGroup,
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
 const http = require('http');
@@ -94,6 +97,163 @@ function matchDealByChatName(name) {
     if (lc.includes(substr.toLowerCase())) return deal_id;
   }
   return null;
+}
+
+// Extract the text body from a Baileys message envelope. WhatsApp has many
+// message subtypes (conversation, extendedTextMessage, image+caption, etc.) —
+// this normalizes them to a single string the platform can store.
+function extractText(message) {
+  if (!message) return '';
+  return message.conversation
+      || message.extendedTextMessage?.text
+      || message.imageMessage?.caption
+      || message.videoMessage?.caption
+      || message.documentMessage?.caption
+      || message.buttonsResponseMessage?.selectedDisplayText
+      || message.listResponseMessage?.title
+      || '';
+}
+
+// Map Baileys media subtype → our DB media_type vocabulary
+function mediaTypeFor(messageType) {
+  if (!messageType) return null;
+  if (messageType === 'imageMessage') return 'image';
+  if (messageType === 'videoMessage') return 'video';
+  if (messageType === 'audioMessage') return 'audio';
+  if (messageType === 'documentMessage') return 'document';
+  if (messageType === 'stickerMessage') return 'sticker';
+  return null;
+}
+
+function extFor(mime) {
+  if (!mime) return 'bin';
+  if (mime.startsWith('image/')) return mime.split('/')[1].split(';')[0];
+  if (mime.startsWith('video/')) return mime.split('/')[1].split(';')[0];
+  if (mime.startsWith('audio/')) return 'ogg';
+  if (mime.includes('pdf')) return 'pdf';
+  if (mime.includes('wordprocessingml')) return 'docx';
+  if (mime.includes('msword')) return 'doc';
+  if (mime.includes('spreadsheetml')) return 'xlsx';
+  if (mime.includes('presentationml')) return 'pptx';
+  if (mime.includes('zip')) return 'zip';
+  return 'bin';
+}
+
+// Best-effort chat name resolver. Prefer learned name; fall back to JID. For
+// individual chats lacking a learned name yet, use pushName from the message.
+function resolveChatName(jid, fallbackPushName) {
+  return JID_TO_CHAT_NAME.get(jid)
+      || fallbackPushName
+      || jid?.split('@')[0]
+      || 'unknown';
+}
+
+// Ingest a single Baileys message into the platform DB. Idempotent via
+// raw_hash UNIQUE index on messages — re-ingesting the same message is a
+// no-op. Mirrors the old daemon's behavior precisely so the rest of the
+// platform (reconcile, this-week, chase queue, etc.) sees identical data
+// regardless of which WA daemon is active.
+async function ingestMessage(sock, msg) {
+  try {
+    const jid = msg.key?.remoteJid;
+    if (!jid) return false;
+
+    // Skip protocol noise (ephemeral key updates, etc.) — these have no message
+    // content and would create junk rows
+    if (!msg.message) return false;
+    // Skip ephemeral messages we already handled (Baileys can re-emit on history sync)
+    const messageType = getContentType(msg.message);
+    if (!messageType) return false;
+    // Skip status broadcasts
+    if (jid === 'status@broadcast') return false;
+
+    // Get the chat name (learn it if it's an individual contact we haven't seen)
+    if (msg.pushName && !isJidGroup(jid) && !JID_TO_CHAT_NAME.has(jid)) {
+      rememberChat(jid, msg.pushName);
+    }
+    const chatName = resolveChatName(jid, msg.pushName);
+
+    // Allowlist filter (read-side): only ingest chats Riley wants tracked
+    if (ALLOW.chats?.length && !ALLOW.chats.some(s => chatName.includes(s))) return false;
+
+    const fromMe = !!msg.key.fromMe;
+    // Sender label: "Riley" for outbound, contact name for inbound, group sender
+    // name for group messages (Baileys puts that in msg.pushName for the participant)
+    const senderName = fromMe ? 'Riley' : (msg.pushName || chatName);
+
+    // Timestamp: Baileys gives Unix seconds in messageTimestamp (sometimes as a
+    // BigInt — coerce to Number defensively)
+    const tsSec = Number(msg.messageTimestamp || Date.now() / 1000);
+    const ts = new Date(tsSec * 1000).toISOString();
+
+    // Thread + message identifiers (keep parity with old daemon so DB queries
+    // don't need updates)
+    const threadId = 'wa:' + chatName;
+    const body = extractText(msg.message);
+    const snippet = body.slice(0, 140);
+    // Use Baileys' own message ID for stable de-dup across daemon restarts.
+    // Fall back to a content hash if for some reason the ID is missing.
+    const msgId = msg.key.id
+      ? `wa:${threadId}:${msg.key.id}`
+      : `wa:${threadId}:${sha(`${ts}:${body}:${fromMe ? 1 : 0}`)}`;
+
+    const dealId = matchDealByChatName(chatName);
+    upsertThread.run(threadId, dealId, chatName, ts, fromMe ? 'us' : 'them', fromMe ? 'them' : 'us');
+
+    // Media download for image/video/audio/document
+    let mediaType = null, mediaPath = null, mediaMime = null, mediaFilename = null, mediaSize = null;
+    const isMedia = ['imageMessage','videoMessage','audioMessage','documentMessage','stickerMessage'].includes(messageType);
+    if (isMedia) {
+      try {
+        const buffer = await downloadMediaMessage(msg, 'buffer', {});
+        if (buffer && buffer.length) {
+          mediaSize = buffer.length;
+          const messageContent = msg.message[messageType];
+          mediaMime = messageContent?.mimetype || 'application/octet-stream';
+          mediaFilename = messageContent?.fileName || `${messageType}-${Date.now()}.${extFor(mediaMime)}`;
+          mediaType = mediaTypeFor(messageType);
+          const safeName = String(mediaFilename).replace(/[^A-Za-z0-9._-]/g, '_');
+          const fileName = `${sha(msgId)}-${safeName}`;
+          fs.writeFileSync(`${MEDIA_DIR}/${fileName}`, buffer);
+          mediaPath = `wa-media/${fileName}`;
+          if (!msg._backfillMode) {
+            console.log(`[wa-baileys]   📎 ${mediaType}: ${mediaFilename} (${Math.round(mediaSize/1024)}KB)`);
+          }
+        }
+      } catch (e) {
+        if (!msg._backfillMode) console.warn(`[wa-baileys] media download failed for ${msgId}:`, e.message);
+      }
+    }
+
+    const result = insertMsg.run(msgId, threadId, senderName, fromMe ? 1 : 0, ts, snippet, body, msgId,
+                                  mediaType, mediaPath, mediaMime, mediaFilename, mediaSize);
+    const wasNew = result.changes > 0;
+
+    // Mirror media into the unified message_attachments table so the per-deal
+    // Attachments strip on the UI picks it up
+    if (mediaPath) {
+      try {
+        db.prepare(`INSERT OR IGNORE INTO message_attachments
+          (message_id, thread_id, channel, media_path, media_filename, media_mime, media_size, media_type)
+          VALUES (?, ?, 'whatsapp', ?, ?, ?, ?, ?)`).run(
+          msgId, threadId, mediaPath, mediaFilename, mediaMime, mediaSize, mediaType);
+      } catch { /* attachments table may not exist on very old DBs */ }
+    }
+
+    // Propagate to deal ball/activity (matches old daemon behavior)
+    if (dealId && wasNew) {
+      db.prepare(`UPDATE deals SET ball_in_court=?, last_activity_at=?, last_activity_by=? WHERE id=?`)
+        .run(fromMe ? 'them' : 'us', ts, fromMe ? 'us' : 'them', dealId);
+    }
+
+    if (wasNew && !msg._backfillMode) {
+      console.log(`[wa-baileys] ${fromMe ? '→' : '←'} ${chatName}: ${snippet.slice(0, 80)}`);
+    }
+    return wasNew;
+  } catch (e) {
+    console.warn('[wa-baileys] ingest error:', e.message);
+    return false;
+  }
 }
 
 // ---- State exposed via /status ---------------------------------------------
@@ -184,22 +344,22 @@ async function connectToWhatsApp() {
   // Persist auth state on every credential update (so restart resumes session)
   sock.ev.on('creds.update', saveCreds);
 
-  // Learn chat names as messages stream in. This builds CHAT_NAME_TO_JID over
-  // time so /send can resolve "Cooper x Triibe" → JID without us hardcoding.
-  // Phase 3 will additionally write each message into the DB.
+  // Live message ingest: every WA message lands in the platform DB the moment
+  // it arrives over the socket. This is the core feature — once this is live,
+  // the chase queue, last_outbound chip, and reconcile all see WA traffic in
+  // real time (no more "you nudged Nawa today but the platform thinks you
+  // didn't" gap).
   sock.ev.on('messages.upsert', async (m) => {
     LAST_EVENT_AT = new Date().toISOString();
     if (process.env.DEBUG_WA) console.log('[wa-baileys] event:', m.type, m.messages?.length || 0);
+    // m.type: 'notify' (live), 'append' (history), 'prepend' (older history)
+    // All three are worth ingesting — dedupe happens at the DB layer via raw_hash
     for (const msg of (m.messages || [])) {
-      const jid = msg.key?.remoteJid;
-      if (!jid) continue;
-      // For individual chats Baileys provides msg.pushName (the contact's display name)
-      // For groups we already learned subject from groupFetchAllParticipating
-      if (msg.pushName && !JID_TO_CHAT_NAME.has(jid)) {
-        rememberChat(jid, msg.pushName);
-      }
+      // History-sync messages are sometimes flagged via key.fromMe being weird
+      // or messageTimestamp being old; we treat them like any other for ingest
+      // since the UNIQUE index on raw_hash de-dupes naturally.
+      await ingestMessage(sock, msg);
     }
-    // TODO PHASE 3: ingest each message into DB (upsertThread + insertMsg)
   });
 
   // Also learn from chats.upsert / chats.set events so we don't have to wait
