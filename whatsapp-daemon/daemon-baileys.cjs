@@ -104,6 +104,32 @@ let LAST_BACKFILL_NEW = 0;      // # rows inserted during last backfill
 let LAST_QR = null;             // QR data URL string (for /qr endpoint when needed)
 let SOCK = null;                // active Baileys socket
 
+// Chat-name → JID map. Populated as messages/chats stream in. Lowercase keys
+// so substring lookups work case-insensitively. JIDs look like:
+//   individual:  "15145551234@s.whatsapp.net"
+//   group:       "120363025678-1234@g.us"
+const CHAT_NAME_TO_JID = new Map();
+const JID_TO_CHAT_NAME = new Map();
+
+function rememberChat(jid, name) {
+  if (!jid || !name) return;
+  const lc = name.toLowerCase();
+  CHAT_NAME_TO_JID.set(lc, jid);
+  JID_TO_CHAT_NAME.set(jid, name);
+}
+
+function findJidByChatName(chatName) {
+  if (!chatName) return null;
+  const lc = chatName.toLowerCase();
+  // Exact match first
+  if (CHAT_NAME_TO_JID.has(lc)) return CHAT_NAME_TO_JID.get(lc);
+  // Substring match (find first name that contains the query OR is contained by it)
+  for (const [storedLc, jid] of CHAT_NAME_TO_JID.entries()) {
+    if (storedLc.includes(lc) || lc.includes(storedLc)) return jid;
+  }
+  return null;
+}
+
 // ---- Connect to WhatsApp ---------------------------------------------------
 async function connectToWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -135,6 +161,14 @@ async function connectToWhatsApp() {
       READY = true;
       LAST_QR = null;
       console.log('[wa-baileys] ✓ connected — listening for messages + HTTP on :' + PORT);
+      // On open, populate the chat-name map from groups so /send can resolve
+      // chats by name immediately (individual chats get learned as messages arrive)
+      sock.groupFetchAllParticipating().then(groups => {
+        for (const [jid, meta] of Object.entries(groups || {})) {
+          if (meta?.subject) rememberChat(jid, meta.subject);
+        }
+        console.log(`[wa-baileys] learned ${Object.keys(groups || {}).length} group chats`);
+      }).catch(e => console.warn('[wa-baileys] group fetch err:', e.message));
     } else if (connection === 'close') {
       READY = false;
       const code = lastDisconnect?.error?.output?.statusCode;
@@ -150,12 +184,35 @@ async function connectToWhatsApp() {
   // Persist auth state on every credential update (so restart resumes session)
   sock.ev.on('creds.update', saveCreds);
 
-  // PHASE 3 will wire 'messages.upsert' here. For now, just log + bump LAST_EVENT_AT
-  // so /status reflects the daemon is actively receiving traffic.
-  sock.ev.on('messages.upsert', (m) => {
+  // Learn chat names as messages stream in. This builds CHAT_NAME_TO_JID over
+  // time so /send can resolve "Cooper x Triibe" → JID without us hardcoding.
+  // Phase 3 will additionally write each message into the DB.
+  sock.ev.on('messages.upsert', async (m) => {
     LAST_EVENT_AT = new Date().toISOString();
     if (process.env.DEBUG_WA) console.log('[wa-baileys] event:', m.type, m.messages?.length || 0);
+    for (const msg of (m.messages || [])) {
+      const jid = msg.key?.remoteJid;
+      if (!jid) continue;
+      // For individual chats Baileys provides msg.pushName (the contact's display name)
+      // For groups we already learned subject from groupFetchAllParticipating
+      if (msg.pushName && !JID_TO_CHAT_NAME.has(jid)) {
+        rememberChat(jid, msg.pushName);
+      }
+    }
     // TODO PHASE 3: ingest each message into DB (upsertThread + insertMsg)
+  });
+
+  // Also learn from chats.upsert / chats.set events so we don't have to wait
+  // for a message to arrive before /send can resolve a chat name
+  sock.ev.on('chats.upsert', (chats) => {
+    for (const c of chats) {
+      if (c.id && c.name) rememberChat(c.id, c.name);
+    }
+  });
+  sock.ev.on('chats.set', ({ chats }) => {
+    for (const c of (chats || [])) {
+      if (c.id && c.name) rememberChat(c.id, c.name);
+    }
   });
 
   return sock;
@@ -199,16 +256,108 @@ const server = http.createServer(async (req, res) => {
 </body>`);
   }
 
-  // /send — stub for Phase 1, implemented in Phase 2
+  // /send — write a WhatsApp message. Same contract as the old daemon:
+  //   POST { chat_name, text } → { ok, chat, jid, message_id } or { ok:false, reason }
+  // chat_name is matched case-insensitively against learned chat names (exact
+  // or substring). Allowlist check happens before send.
   if (req.method === 'POST' && url.pathname === '/send') {
-    res.writeHead(501, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ ok: false, reason: 'send not yet implemented in baileys daemon (phase 2)' }));
+    if (!READY || !SOCK) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: false, reason: 'daemon not ready' }));
+    }
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', async () => {
+      let payload;
+      try { payload = JSON.parse(body); }
+      catch { res.writeHead(400); return res.end(JSON.stringify({ ok: false, reason: 'bad json' })); }
+      const { chat_name, text } = payload;
+      if (!chat_name || !text) {
+        res.writeHead(400);
+        return res.end(JSON.stringify({ ok: false, reason: 'chat_name + text required' }));
+      }
+      try {
+        const jid = findJidByChatName(chat_name);
+        if (!jid) {
+          res.writeHead(404);
+          return res.end(JSON.stringify({
+            ok: false,
+            reason: `chat "${chat_name}" not found among ${CHAT_NAME_TO_JID.size} learned chats. Send a message TO this chat first so the daemon learns its JID, then retry.`,
+          }));
+        }
+        // Allowlist check on the *learned* canonical name (matches old daemon behavior)
+        const canonicalName = JID_TO_CHAT_NAME.get(jid) || chat_name;
+        const allowSend = !ALLOW.send_chats || ALLOW.send_chats.some(s => canonicalName.includes(s));
+        if (!allowSend) {
+          res.writeHead(403);
+          return res.end(JSON.stringify({ ok: false, reason: `chat "${canonicalName}" not on send allowlist` }));
+        }
+        const result = await SOCK.sendMessage(jid, { text });
+        console.log(`[wa-baileys] ✓ sent to ${canonicalName}: ${text.slice(0, 80)}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          ok: true,
+          chat: canonicalName,
+          jid,
+          message_id: result?.key?.id || null,
+        }));
+      } catch (e) {
+        console.error('[wa-baileys] send error:', e.message);
+        res.writeHead(500);
+        res.end(JSON.stringify({ ok: false, reason: e.message }));
+      }
+    });
+    return;
   }
 
-  // /backfill — stub for Phase 1, implemented in Phase 2
+  // /backfill — Baileys streams real-time messages natively over the WA socket
+  // so the manual backfill loop that the old (Puppeteer) daemon needed is mostly
+  // unnecessary. We still expose this endpoint for compat with the platform's
+  // /api/sync flow. It re-fetches group metadata to refresh our chat-name map
+  // and returns a count of any new chats learned.
   if (req.method === 'POST' && url.pathname === '/backfill') {
-    res.writeHead(501, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ ok: false, reason: 'backfill not yet implemented in baileys daemon (phase 2)' }));
+    if (!READY || !SOCK) {
+      res.writeHead(503, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: false, reason: 'daemon not ready' }));
+    }
+    (async () => {
+      const t0 = Date.now();
+      let learnedNew = 0;
+      try {
+        const groups = await SOCK.groupFetchAllParticipating();
+        for (const [jid, meta] of Object.entries(groups || {})) {
+          if (!meta?.subject) continue;
+          if (!JID_TO_CHAT_NAME.has(jid)) learnedNew++;
+          rememberChat(jid, meta.subject);
+        }
+        LAST_BACKFILL_AT = new Date().toISOString();
+        LAST_BACKFILL_NEW = learnedNew;
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          ok: true,
+          backend: 'baileys',
+          note: 'Baileys streams messages live over the WA socket — no manual message backfill needed. This endpoint refreshes the chat-name map.',
+          chats_known: CHAT_NAME_TO_JID.size,
+          new_chats_learned: learnedNew,
+          duration_ms: Date.now() - t0,
+          last_backfill_at: LAST_BACKFILL_AT,
+        }));
+      } catch (e) {
+        console.error('[wa-baileys] backfill error:', e.message);
+        res.writeHead(500);
+        res.end(JSON.stringify({ ok: false, reason: e.message }));
+      }
+    })();
+    return;
+  }
+
+  // /chats — debug endpoint, lists currently-learned chat names + JIDs.
+  // Useful when /send returns 404 ("chat not found") to see what we know.
+  if (req.method === 'GET' && url.pathname === '/chats') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    const list = [...JID_TO_CHAT_NAME.entries()].map(([jid, name]) => ({ jid, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return res.end(JSON.stringify({ count: list.length, chats: list }));
   }
 
   res.writeHead(404);
