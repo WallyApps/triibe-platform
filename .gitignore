@@ -37,3 +37,7 @@ credentials/*.json
 
 # Migration tooling output
 cook_all.mjs.log
+
+# Baileys WhatsApp auth session (creds.json + signal keys = full WA account access)
+# NEVER commit — these let anyone replay your authenticated session
+whatsapp-daemon/baileys-auth/

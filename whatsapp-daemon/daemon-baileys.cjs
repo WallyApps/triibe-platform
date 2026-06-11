@@ -37,6 +37,7 @@ const {
   isJidGroup,
 } = require('@whiskeysockets/baileys');
 const qrcode = require('qrcode-terminal');
+const qrImage = require('qrcode');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -398,22 +399,47 @@ const server = http.createServer(async (req, res) => {
     }));
   }
 
-  // QR endpoint — convenient browser-friendly QR display when terminal isn't visible
+  // QR endpoint — renders the current QR as inline SVG (no external image
+  // service, no caching). Auto-refreshes every 8s so the page always shows the
+  // freshest QR. WhatsApp rejects stale QRs with "Check your connection and try
+  // again" so freshness matters.
   if (req.method === 'GET' && url.pathname === '/qr') {
-    if (!LAST_QR) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      return res.end(READY ? 'Already authenticated.\n' : 'No QR pending. Restart daemon to generate one.\n');
+    if (READY) {
+      res.writeHead(200, { 'Content-Type': 'text/html' });
+      return res.end('<!doctype html><meta charset=utf-8><body style="background:#0a0a0a;color:#7BC98A;font:18px system-ui;text-align:center;padding:60px"><h1>✓ Already connected</h1><p style="opacity:.6">You can close this tab.</p></body>');
     }
-    // Render QR as inline HTML (uses qrcode-terminal's data, encoded via a CDN)
-    const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(LAST_QR)}`;
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    return res.end(`<!doctype html><meta charset=utf-8><title>WhatsApp QR</title>
+    if (!LAST_QR) {
+      res.writeHead(503, { 'Content-Type': 'text/html' });
+      return res.end('<!doctype html><meta charset=utf-8><meta http-equiv="refresh" content="2"><body style="background:#0a0a0a;color:#eee;font:14px system-ui;text-align:center;padding:60px"><h1>Waiting for QR…</h1><p style="opacity:.6">This page will refresh automatically.</p></body>');
+    }
+    try {
+      const svg = await qrImage.toString(LAST_QR, {
+        type: 'svg',
+        errorCorrectionLevel: 'L',
+        margin: 2,
+        width: 400,
+        color: { dark: '#000000', light: '#ffffff' },
+      });
+      const stamp = new Date().toISOString().slice(11, 19);
+      res.writeHead(200, {
+        'Content-Type': 'text/html',
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        Pragma: 'no-cache',
+      });
+      return res.end(`<!doctype html><meta charset=utf-8><title>WhatsApp QR</title>
+<!-- Auto-refresh every 8s so the displayed QR is always the freshest one.
+     Baileys rotates the QR ~every 20s, so 8s keeps us well inside the window. -->
+<meta http-equiv="refresh" content="8">
 <body style="background:#0a0a0a;color:#eee;font:14px system-ui;text-align:center;padding:30px">
-<h1 style="font-weight:400">Scan this with WhatsApp on your phone</h1>
-<p style="opacity:.6">Settings → Linked devices → Link a device</p>
-<img src="${qrUrl}" style="background:#fff;padding:14px;border-radius:8px">
-<p style="margin-top:20px;opacity:.5">This page won't auto-refresh. Reload after scanning.</p>
+<h1 style="font-weight:400;margin:0 0 4px">Scan with WhatsApp</h1>
+<p style="opacity:.55;margin:0 0 24px">Settings → Linked devices → Link a device</p>
+<div style="display:inline-block;background:#fff;padding:18px;border-radius:14px">${svg}</div>
+<p style="margin-top:18px;opacity:.45;font-size:11px;letter-spacing:.05em">QR rotated at ${stamp} · auto-refreshes every 8s</p>
 </body>`);
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'text/plain' });
+      return res.end('QR render error: ' + e.message);
+    }
   }
 
   // /send — write a WhatsApp message. Same contract as the old daemon:
