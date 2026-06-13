@@ -167,6 +167,40 @@ export function promoteFromEmailSignal({ db, deal, msgText }) {
   return { promoted: true, notification_id, applied };
 }
 
+// TIER 3 — lifecycle audit found contract signed
+// Bumps deals from contract_received / terms_agreed / similar into signed/won
+// when the AI audit (which now reads creator-chat) sees a high-confidence
+// "contract signed" signal. Idempotent: skips deals already in won/signed.
+export function promoteFromAuditVerdict({ db, deal, verdict }) {
+  if (!deal || !verdict) return { promoted: false, reason: 'no input' };
+  // Skip if already won — nothing to do.
+  if (deal.state === 'won' && /signed|posted|completed/.test(deal.raw_stage || '')) {
+    return { promoted: false, reason: 'already advanced' };
+  }
+  const cs = verdict.contract_signed;
+  if (!cs || cs.status !== 'done' || (cs.confidence ?? 0) < 0.85) {
+    return { promoted: false, reason: 'no high-confidence signed verdict' };
+  }
+  // Only promote out of stages where signing is the natural next step.
+  const eligibleStages = new Set([
+    'rate_sent','negotiating','terms_agreed','terms_agreed_pending_client',
+    'contract_sent','contract_pending','contract_received',
+  ]);
+  if (!eligibleStages.has(deal.raw_stage || '')) {
+    return { promoted: false, reason: `stage ${deal.raw_stage} not eligible` };
+  }
+  const snapshot = snapshotDeal(deal);
+  const applied = applyStage(db, deal, { raw_stage: 'signed' });
+  if (!applied) return { promoted: false, reason: 'no funnel mapping' };
+  const title = `✍️ ${deal.brand} signed`;
+  const body  = `Audit found contract signed (${cs.evidence?.slice(0, 90) || 'high confidence'}). Bumped to signed/won.`;
+  const notification_id = logNotification(db, {
+    kind: 'auto_promote_audit',
+    deal, title, body, snapshot, applied
+  });
+  return { promoted: true, notification_id, applied };
+}
+
 // Undo — reverts a notification's state change. Idempotent.
 // Two flavors:
 //   1. lead_promoted: the deal was NEWLY CREATED from an orphan contract/pitch,

@@ -5,7 +5,8 @@
       "name": "triibe-platform",
       "runtimeExecutable": "echo",
       "runtimeArgs": ["already running via launchd"],
-      "port": 4744
+      "port": 4744,
+      "autoPort": false
     }
   ]
 }

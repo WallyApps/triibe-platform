@@ -19,6 +19,15 @@
     "_note": "Floor matches UGC rate — minimum acceptable Charlie deal."
   },
 
+  "brian": {
+    "ig_reel_cents":     600000,
+    "tiktok_cents":      500000,
+    "ig_story_cents":    150000,
+    "ugc_cents":         125000,
+    "floor_cents":       400000,
+    "_note": "Brian Wallack — basketball niche. 705k IG / 502k TikTok. Floor at $4K (~80% of TikTok standard) so we don't leak sub-floor on either platform."
+  },
+
   "exclusivity_policy": {
     "default_ask":      0,
     "max_accept_days":  30,

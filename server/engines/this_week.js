@@ -256,11 +256,18 @@ export async function buildThisWeek({ db, creator, apiKey = null, stripQuotedRep
       out.push({
         deal_id: d.id,
         brand: d.brand,
+        creator_id: d.creator_id,
         fee_cents: d.fee_cents,
         raw_stage: d.raw_stage,
         funnel_stage: d.funnel_stage,
         state: d.state,
         posting_date: d.posting_date,
+        payment_terms_days: d.payment_terms_days,
+        // Cached AI lifecycle verdict — buildLifecycle() applies this on top
+        // of the keyword inference so the checklist reflects what the AI
+        // determined from reading the full conversation.
+        lifecycle_state: d.lifecycle_state,
+        lifecycle_audited_at: d.lifecycle_audited_at,
         key_dates,
         actions,
         open_count: openActions.length,
@@ -281,9 +288,13 @@ export async function buildThisWeek({ db, creator, apiKey = null, stripQuotedRep
   // Pending = "Close these deals" — active negotiation where brand has put a real
   //   number on the table OR sent a substantive reply in the last 7 days needing
   //   our response (NOT silent rate-pitched — those are in Follow Ups).
+  // "Confirmed" means there's a SIGNED CONTRACT (or equivalent commitment).
+  // 'terms_agreed' is verbal — brand said yes but no paper yet, so it belongs
+  // in PENDING (Close these deals) not Active. Fixes the GoMarble case where
+  // John said "we'll take it back to the team" — that's not a contract.
   const CONFIRMED_RAW_STAGES = new Set([
     'signed', 'contract_signed', 'contract_received',
-    'in_revision', 'in_production', 'confirmed', 'terms_agreed',
+    'in_revision', 'in_production', 'confirmed',
   ]);
   const confirmed = [];
   const pending = [];
@@ -297,11 +308,54 @@ export async function buildThisWeek({ db, creator, apiKey = null, stripQuotedRep
       && (Date.now() - new Date(dealRow.last_activity_at).getTime()) / 86400000 < 7;
     const isActiveNeg = dealRow?.ball_in_court === 'us' && recentBrandActivity;
     const isTermsAgreed = dealRow?.raw_stage === 'terms_agreed_pending_client';
-    if (isActiveNeg || isTermsAgreed) {
+    // Carry forward ball_in_court so the client can render chase urgency chips
+    // without re-querying the deals table.
+    if (dealRow) {
+      d.ball_in_court = dealRow.ball_in_court;
+      d.last_activity_at = dealRow.last_activity_at;
+    }
+    // Chase-eligible: real-money deal ($1K+) that's gone quiet long enough to
+    // bleed value. Used to live in a separate Chase queue tray — now folded in
+    // so Close these deals is a single source of truth for "money in flight."
+    let isChaseEligible = false;
+    if (dealRow && (d.fee_cents || 0) >= 100_000 && dealRow.last_activity_at) {
+      const daysQuiet = (Date.now() - new Date(dealRow.last_activity_at).getTime()) / 86400_000;
+      const ballUs    = dealRow.ball_in_court === 'us' || dealRow.ball_in_court === 'riley';
+      const ballBrand = dealRow.ball_in_court === 'brand';
+      if (ballUs && daysQuiet >= 4 && daysQuiet <= 30) isChaseEligible = true;
+      if (ballBrand && daysQuiet >= 5 && daysQuiet <= 21) isChaseEligible = true;
+    }
+    if (isActiveNeg || isTermsAgreed || isChaseEligible) {
       pending.push(d);
     }
     // else: silent rate_sent → goes to Follow Ups tab (separate /api/follow-ups endpoint)
   }
+  // Annotate each pending deal with chase urgency — same rules as the standalone
+  // Chase queue used to apply. Chip surfaces inline on the Close-These pill.
+  // - we_owe: ball on us AND 4+ days since last activity (we dropped it)
+  // - stalled: ball on brand AND 5-21 days quiet (they're sitting on it)
+  // - null:    nothing to chase
+  // Only annotate $1K+ deals — sub-$1K conversations aren't worth a flag.
+  const DAY = 86400_000;
+  for (const d of pending) {
+    if (!d.last_activity_at || (d.fee_cents || 0) < 100_000) continue;
+    const daysQuiet = Math.floor((Date.now() - new Date(d.last_activity_at).getTime()) / DAY);
+    if ((d.ball_in_court === 'us' || d.ball_in_court === 'riley') && daysQuiet >= 4) {
+      d.chase = { kind: 'we_owe', days_quiet: daysQuiet };
+    } else if (d.ball_in_court === 'brand' && daysQuiet >= 5 && daysQuiet <= 21) {
+      d.chase = { kind: 'stalled', days_quiet: daysQuiet };
+    }
+  }
+  // Sort pending: chase candidates first (we_owe before stalled, higher $ first
+  // within each tier), then everything else by close-score or fee.
+  pending.sort((a, b) => {
+    const rank = (x) => x.chase?.kind === 'we_owe' ? 0
+                     : x.chase?.kind === 'stalled' ? 1
+                     : 2;
+    const ra = rank(a), rb = rank(b);
+    if (ra !== rb) return ra - rb;
+    return (b.fee_cents || 0) - (a.fee_cents || 0);
+  });
   return { deals: confirmed, pending };
 }
 

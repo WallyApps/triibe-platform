@@ -525,6 +525,26 @@ export async function downloadAttachment({ gmail, messageId, attachment }) {
 // Outlook-style "From:/Sent:" headers and "--- Forwarded message ---" banners.
 export function stripQuotedReply(body) {
   if (!body) return body;
+
+  // 0. Single-line fallback — when upstream ingest has flattened newlines
+  // (common for HTML-converted Gmail bodies), the line-based logic below
+  // finds nothing. Cut on the first inline marker of a forwarded block:
+  // CJK Outlook header, English Outlook header, "On <date> ... wrote:",
+  // or a long em-dash divider immediately followed by such a marker.
+  if (!/\n/.test(body)) {
+    const m = body.match(
+      /(?:[—=_-]{6,}\s*)?(?:发件人|发信人|寄件者|差出人|寄件人)\s*[:：]/
+    ) || body.match(
+      /(?:[—=_-]{6,}\s*)?\bFrom:\s*\S[^\n]{0,150}?\b(?:Sent|Date|Datum|Envoy[ée]|Gesendet):/
+    ) || body.match(
+      /\bOn\s+\w+,?\s+\w+\s+\d{1,2}[,.]?\s+\d{2,4}[\s\S]{0,80}?\bwrote:/
+    ) || body.match(
+      /[-=]{2,}\s*(?:Forwarded message|Original Message|Mensaje original|Mensaje reenviado)/i
+    );
+    if (m && m.index > 0) return body.slice(0, m.index).trim();
+    return body;
+  }
+
   const lines = body.split('\n');
 
   // 1. Find the first quote-prefixed line ("> ...")

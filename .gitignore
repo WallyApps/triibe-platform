@@ -4,6 +4,13 @@ data/*.db-journal
 data/*.db-wal
 data/*.db-shm
 
+# Private brand briefs + contract attachments auto-downloaded from Gmail
+# (PDFs of paid-deal scopes — never commit)
+data/email-media/
+
+# WhatsApp media downloads — voice notes, images, attachments from brand WA chats
+data/wa-media/
+
 # Secrets / API keys — NEVER commit
 .env
 .env.*

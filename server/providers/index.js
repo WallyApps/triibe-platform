@@ -13,7 +13,28 @@ import { LocalWhatsAppSendProvider } from './whatsappsend.local.js';
 import { SpendGuard } from './spend_guard.js';
 
 let _db = null;
-function db() { return _db ||= openDb(); }
+function db() {
+  if (_db) return _db;
+  _db = openDb();
+  runIdempotentMigrations(_db);
+  return _db;
+}
+
+// One-time additive migrations that run on first DB open. ALTER TABLE ADD COLUMN
+// in SQLite errors on duplicate, so we wrap each in try/catch — clean way to
+// keep schema evolution in code without a separate migrations table.
+function runIdempotentMigrations(d) {
+  const ddl = [
+    // Parked-deals feature: deals you want to revisit later (Lea-style "reach
+    // out when schedule aligns"). state='dormant' marks it parked; revisit_at
+    // is when the daily revival job should pop it back into Pitches.
+    "ALTER TABLE deals ADD COLUMN revisit_at TEXT",
+    "ALTER TABLE deals ADD COLUMN park_reason TEXT",
+    "ALTER TABLE deals ADD COLUMN parked_at TEXT",
+    "ALTER TABLE deals ADD COLUMN revived_at TEXT",
+  ];
+  for (const stmt of ddl) { try { d.exec(stmt); } catch { /* already exists */ } }
+}
 
 function cfg(key, fallback) {
   const row = db().prepare('SELECT value FROM config WHERE key=?').get(key);

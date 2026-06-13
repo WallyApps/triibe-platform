@@ -140,13 +140,20 @@ function extFor(mime) {
   return 'bin';
 }
 
-// Best-effort chat name resolver. Prefer learned name; fall back to JID. For
-// individual chats lacking a learned name yet, use pushName from the message.
-function resolveChatName(jid, fallbackPushName) {
-  return JID_TO_CHAT_NAME.get(jid)
-      || fallbackPushName
-      || jid?.split('@')[0]
-      || 'unknown';
+// Best-effort chat name resolver. Prefer learned name; fall back to JID.
+// CRITICAL: for OUTBOUND messages (Riley sending to a brand), msg.pushName is
+// Riley's own profile name, NOT the recipient. Using it as the chat name
+// fallback creates junk threads like "wa:Riley". So we accept a `fromMe` flag
+// and refuse to use pushName as a fallback when it's our own outbound.
+function resolveChatName(jid, fallbackPushName, fromMe) {
+  // Learned chat name always wins
+  const learned = JID_TO_CHAT_NAME.get(jid);
+  if (learned) return learned;
+  // For incoming msgs, pushName is the sender (the contact we care about).
+  // For outgoing msgs, pushName is OUR name — don't use it.
+  if (!fromMe && fallbackPushName) return fallbackPushName;
+  // Fall back to the JID's phone-number portion ("17785134803@s.whatsapp.net" → "17785134803")
+  return (jid && jid.split('@')[0]) || 'unknown';
 }
 
 // Ingest a single Baileys message into the platform DB. Idempotent via
@@ -168,16 +175,18 @@ async function ingestMessage(sock, msg) {
     // Skip status broadcasts
     if (jid === 'status@broadcast') return false;
 
+    const fromMe = !!msg.key.fromMe;
     // Get the chat name (learn it if it's an individual contact we haven't seen)
-    if (msg.pushName && !isJidGroup(jid) && !JID_TO_CHAT_NAME.has(jid)) {
+    // CRITICAL: only learn pushName from INBOUND messages — outbound messages
+    // carry Riley's own pushName, which would mislabel the chat as "Riley".
+    if (msg.pushName && !fromMe && !isJidGroup(jid) && !JID_TO_CHAT_NAME.has(jid)) {
       rememberChat(jid, msg.pushName);
     }
-    const chatName = resolveChatName(jid, msg.pushName);
+    const chatName = resolveChatName(jid, msg.pushName, fromMe);
 
     // Allowlist filter (read-side): only ingest chats Riley wants tracked
     if (ALLOW.chats?.length && !ALLOW.chats.some(s => chatName.includes(s))) return false;
 
-    const fromMe = !!msg.key.fromMe;
     // Sender label: "Riley" for outbound, contact name for inbound, group sender
     // name for group messages (Baileys puts that in msg.pushName for the participant)
     const senderName = fromMe ? 'Riley' : (msg.pushName || chatName);

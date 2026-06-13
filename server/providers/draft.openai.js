@@ -269,7 +269,39 @@ export class OpenAIDraftProvider {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OPENAI_API_KEY missing in .env');
 
-    const sug = suggestPrice(deal);
+    // NUDGE FATIGUE: when Riley has already sent 2+ messages in a row with no
+    // brand reply between them, another "just following up" is wasted breath
+    // (and looks desperate). Override the mode to last_touch — graceful door-
+    // open close instead of another chase.
+    if (mode === 'nudge_follow_up' || mode === 'gentle_nudge') {
+      let consecutiveOurs = 0;
+      for (let i = (threadHistory || []).length - 1; i >= 0; i--) {
+        if (threadHistory[i].from_us) consecutiveOurs++;
+        else break;
+      }
+      if (consecutiveOurs >= 2) {
+        mode = 'last_touch';
+      }
+    }
+
+    let sug = suggestPrice(deal);
+    // RILEY'S OWN ANCHOR CAP — if he has stated $ figures in this thread
+    // already (e.g. "standard $2,000, floor $1,500"), the new draft cannot
+    // exceed his highest stated number. Prevents the Zingroll bug where the
+    // nudge engine proposed $3k after Riley had anchored at $2k/$1.5k.
+    const rileyAnchor = extractRileyThreadAnchors(threadHistory);
+    if (rileyAnchor.max_cents && sug.suggested_cents && sug.suggested_cents > rileyAnchor.max_cents) {
+      sug = {
+        ...sug,
+        suggested_cents: rileyAnchor.max_cents,
+        anchor_cents: rileyAnchor.max_cents,
+        // Tighten floor too if Riley stated a lower number explicitly.
+        floor_cents: rileyAnchor.min_cents && rileyAnchor.min_cents < (sug.floor_cents || Infinity)
+          ? rileyAnchor.min_cents : sug.floor_cents,
+        reasoning: `Capped at $${Math.round(rileyAnchor.max_cents/100).toLocaleString()} — Riley already anchored at this rate in the thread; do not propose a higher number.`,
+        _thread_anchored: true,
+      };
+    }
     // Include the custom instruction in dedupe so different voice-noted
     // instructions on the same thread cook fresh drafts (not the same draft).
     const dedupe_key = `draft:${deal.id}:${mode}:${(latestMessage?.id || deal.latest_msg_id || '')}:${customInstruction ? hash(customInstruction) : ''}:${Date.now()}`;
@@ -395,12 +427,52 @@ const MODE_INSTRUCTIONS = {
   flag_contract_mismatch: 'Mode: FLAG CONTRACT MISMATCH. The contract has issues vs the agreed terms (see flags/notes — e.g. blank fields, wrong dates, fee discrepancy). Politely point out the specific issue(s) and ask them to correct & resend.',
   request_signature: 'Mode: REQUEST SIGNATURE. Contract is ready; ask them to countersign / send the signed version back, confirm next steps.',
   acknowledge_progress: 'Mode: ACKNOWLEDGE PROGRESS. The brand has moved things forward (contract sent, DocuSign issued, brief delivered, etc.). Do NOT re-ask for terms or quote — terms are agreed. Briefly thank them, confirm what we will do next (sign the agreement, deliver on the agreed timeline, etc.), and reference any specific detail from their message (e.g. who they sent the DocuSign to, the posting date, the deliverable). Keep it short — 3-4 sentences max.',
-  payment_followup:  'Mode: PAYMENT FOLLOWUP. Production/signing done; we need them to confirm payee info / payment routing. Offer to send W-9 + remittance details + invoice. Mention payment terms.',
-  chase_payment:     'Mode: CHASE PAYMENT. Invoice is out and due. Polite, professional nudge with the invoice number and net terms.',
-  gentle_nudge:      'Mode: GENTLE NUDGE. Thread has gone quiet, ball was on brand. Friendly check-in, offer a quick call if easier.',
+  payment_followup:  'Mode: PAYMENT FOLLOWUP. Production/signing done; we need them to confirm payee info / payment routing. Offer to send W-9 + remittance details + invoice. Use the actual payment_terms_days from the deal context — do NOT fabricate net terms if none are stated.',
+  chase_payment:     'Mode: CHASE PAYMENT. Invoice is out and due. Polite, professional check-in. ONLY cite an invoice number if you see one in the thread above — do NOT fabricate an invoice number. If no number is visible, reference "the invoice" generically.',
+  gentle_nudge:      'Mode: GENTLE NUDGE. Thread has gone quiet, ball was on brand. Friendly check-in, restate the existing offer if needed, do NOT propose a new number. Offer a quick call if easier.',
+  last_touch:        'Mode: LAST TOUCH. Riley has already followed up two or more times with no brand reply. Do NOT send another "just following up" — they have seen the prior nudges. Instead: graceful, low-pressure note that takes pressure off, leaves the door open for later, and frees up his mental energy to move on. Acknowledge they may be heads down. Offer to revisit when timing improves. NO new offers, NO new numbers, NO urgency. 3 sentences max.',
+  nudge_follow_up:   'Mode: NUDGE FOLLOW UP. Quick check-in on the existing offer. Restate what we are waiting on (e.g. "any movement on the budget?" or "where did you land on the package?"). Do NOT propose a new number. Keep it 1-3 sentences.',
   channel_switch:    'Mode: CHANNEL SWITCH. Offer to move the conversation to WhatsApp for faster turnaround.',
   custom_instruction:'Mode: CUSTOM. Riley gave specific guidance in the RILEY SAID block — convey EXACTLY that, nothing more. Write a SHORT, focused email (3-4 sentences). Add greeting + signature, but do NOT include fee anchors, negotiation moves, rate proposals, or extra info Riley did not explicitly ask you to include. If Riley\'s message is just an update, keep it light and informational. Do not invent commitments.',
 };
+
+// Scan Riley's prior outbound in this thread for the OPERATIVE standing anchor —
+// the most recent $ he committed to. Used as the ceiling for any draft cooked
+// later in the thread, so the AI can't walk a counter back up.
+//
+// Why "most recent" not "max across thread":
+//   - Similarweb bug: Riley quoted $2,500 at intro, then countered down to
+//     $1,700 after Rachel offered $1k. A naive max would cap at $2,500 and
+//     let the nudge re-propose $2,500, undoing his counter.
+//   - The latest number Riley committed to IS the standing offer. Anything
+//     higher requires explicit scope expansion he authored.
+//
+// Heuristic:
+//   1. Walk Riley's outbound from newest to oldest
+//   2. First message containing a $ figure in the sane band wins
+//   3. From that message: max = standing anchor, min = explicit floor (if any)
+//
+// Sane $ band: $300 to $50,000 (filters phone numbers, promo codes, dates).
+function extractRileyThreadAnchors(threadHistory) {
+  if (!threadHistory || !threadHistory.length) return { max_cents: null, min_cents: null };
+  // Newest-to-oldest scan of Riley's messages
+  for (let i = threadHistory.length - 1; i >= 0; i--) {
+    const m = threadHistory[i];
+    if (!m.from_us) continue;
+    let body = m.body || m.snippet || '';
+    if (m.channel === 'email' && body) {
+      try { body = stripQuotedReply(body) || body; } catch {}
+    }
+    if (!body) continue;
+    const cents = [...body.matchAll(/\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)(?!\d)/g)]
+      .map(x => Math.round(parseFloat(x[1].replace(/,/g,''))*100))
+      .filter(c => c >= 30_000 && c <= 5_000_000);
+    if (!cents.length) continue;
+    // Found Riley's latest message with $ — return its anchors.
+    return { max_cents: Math.max(...cents), min_cents: Math.min(...cents) };
+  }
+  return { max_cents: null, min_cents: null };
+}
 
 // Format a message list as a readable conversation log.
 function formatThread(history, label) {
@@ -455,10 +527,12 @@ Use the full thread above to maintain context, references, and tone. Do not repe
 
 THREAD AWARENESS (critical):
 - BEFORE writing, scan every message above. Note what's been agreed (rate, deliverables, timeline, exclusivity).
-- If we've already shared a number, don't pull a fresh one from thin air — reference our last anchor (e.g. "as discussed, $X for…").
+- If Riley has stated a number in the thread — "$X standard / $Y floor" or any explicit anchor — you MUST stay at or BELOW his highest stated number. NEVER propose a higher rate after Riley has already anchored. The only exceptions are if scope has DEMONSTRABLY expanded (extra deliverable added, longer exclusivity asked, etc.) AND brand requested that expansion.
+- Don't pull a number out of thin air — if a rate has been mentioned in-thread by Riley, reference it (e.g. "as I mentioned, $X for a dedicated Reel").
 - If brand wrote in non-USD currency (£/€/¥), reply in the SAME currency they used unless we've already established USD as the deal currency.
 - Don't ask for info we already have (their budget, scope, posting date) if the thread shows it.
-- If this is the first reply (no prior Riley message in thread), open by sharing our rate card breakdown — don't dance around it.`;
+- If this is the first reply (no prior Riley message in thread), open by sharing our rate card breakdown — don't dance around it.
+${sug._thread_anchored ? `\nANCHOR LOCK: Riley has already anchored at $${(sug.anchor_cents/100).toLocaleString()} in this thread. DO NOT propose a number higher than this. Either restate this rate, restate the floor ($${(sug.floor_cents/100).toLocaleString()}), or hold without a new number.\n` : ''}`;
   return ctx;
 }
 

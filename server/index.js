@@ -90,6 +90,130 @@ route('GET', '/api/funnel', async (req, res, { url }) => {
   }));
 });
 
+// --- PARKED DEALS ----------------------------------------------------------
+// Deals on ice with a "come back later" date. When revisit_at <= today, the
+// daily revival job (revivePastDueParked, called from /api/this-week + sync)
+// flips them back to state=open with revived_at stamped so the UI can show a
+// "REVIVED — last contact Xd ago" banner.
+
+// Auto-revive any dormant deal whose revisit date is today-or-past. Cheap query,
+// idempotent — safe to call on every Pitches/Today refresh.
+function revivePastDueParked(db) {
+  const todayISO = new Date().toISOString().slice(0, 10);
+  return db.prepare(`
+    UPDATE deals
+       SET state = 'open',
+           revived_at = datetime('now'),
+           updated_at = datetime('now')
+     WHERE state = 'dormant'
+       AND revisit_at IS NOT NULL
+       AND revisit_at <= ?
+  `).run(todayISO).changes;
+}
+
+route('GET', '/api/parked', async (req, res, { url }) => {
+  const creator = url.searchParams.get('creator') || undefined;
+  // Run revival first so anything past-due drops OUT of this list and shows up
+  // in Pitches with the revived banner on the next refresh.
+  try { revivePastDueParked(P.db()); } catch {}
+  const rows = P.db().prepare(`
+    SELECT id, brand, creator_id, fee_cents, raw_stage, category,
+           parked_at, revisit_at, park_reason,
+           last_activity_at, ai_summary, next_action_detail
+      FROM deals
+     WHERE state = 'dormant'
+       ${creator ? 'AND creator_id = ?' : ''}
+     ORDER BY revisit_at ASC NULLS LAST, parked_at DESC
+  `).all(...(creator ? [creator] : []));
+  // For each parked deal, attach the last brand message snippet so the UI can
+  // show context even when ai_summary hasn't been generated yet (the legacy
+  // dormant deals from before the Park feature don't have summaries on file).
+  const lastMsgStmt = P.db().prepare(`
+    SELECT m.body, m.snippet, m.sent_at, m.channel, m.from_us, m.sender
+    FROM messages m JOIN threads t ON t.id = m.thread_id
+    WHERE t.deal_id = ?
+    ORDER BY m.sent_at DESC LIMIT 1
+  `);
+  // Compute days-until-revisit for the UI so it can render "in 12d" / "overdue 3d".
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const enriched = rows.map(r => {
+    let days_until = null;
+    if (r.revisit_at) {
+      const t = new Date(r.revisit_at + 'T00:00:00Z').getTime();
+      days_until = Math.round((t - today.getTime()) / 86400000);
+    }
+    // Pull the most recent message on the deal's thread; strip quoted email
+    // reply chains so we don't show stale text from a previous round.
+    const m = lastMsgStmt.get(r.id);
+    let last_msg = null;
+    if (m) {
+      let body = m.body || m.snippet || '';
+      if (m.channel === 'email' && body) {
+        try { body = stripQuotedReply(body) || body; } catch {}
+      }
+      body = body.replace(/\s+/g, ' ').trim();
+      if (body.length > 240) body = body.slice(0, 240).replace(/\s\S*$/, '') + '…';
+      last_msg = {
+        text: body,
+        from: m.from_us ? 'us' : (m.sender || 'brand'),
+        channel: m.channel,
+        sent_at: m.sent_at,
+      };
+    }
+    return { ...r, days_until_revisit: days_until, last_msg };
+  });
+  json(res, { parked: enriched, count: enriched.length });
+});
+
+// Park a deal — state→dormant, set revisit_at (defaults 60 days out) + reason.
+// Body: { revisit_at?: 'YYYY-MM-DD' | null, reason?: string, days_out?: number }
+// If neither revisit_at nor days_out is given, default to 60 days from today.
+route('POST', '/api/deals/([^/]+)/park', async (req, res, { match }) => {
+  const dealId = match[1];
+  const deal = P.data.getDeal(dealId);
+  if (!deal) return json(res, { error: 'not found' }, 404);
+  let body = {};
+  try { body = JSON.parse(await readBody(req) || '{}'); } catch {}
+  let revisitAt = body.revisit_at;
+  if (!revisitAt) {
+    const daysOut = Number.isFinite(body.days_out) ? body.days_out : 60;
+    const d = new Date();
+    d.setDate(d.getDate() + daysOut);
+    revisitAt = d.toISOString().slice(0, 10);
+  }
+  const reason = (body.reason || '').slice(0, 280) || null;
+  P.db().prepare(`
+    UPDATE deals
+       SET state = 'dormant',
+           revisit_at = ?,
+           park_reason = ?,
+           parked_at = datetime('now'),
+           revived_at = NULL,
+           updated_at = datetime('now')
+     WHERE id = ?
+  `).run(revisitAt, reason, dealId);
+  json(res, { ok: true, deal_id: dealId, revisit_at: revisitAt, park_reason: reason });
+});
+
+// Unpark — bring a deal back to active pipeline manually (Riley clicked
+// "Reach out now"). Clears revisit fields so it behaves like a normal open deal.
+route('POST', '/api/deals/([^/]+)/unpark', async (req, res, { match }) => {
+  const dealId = match[1];
+  const deal = P.data.getDeal(dealId);
+  if (!deal) return json(res, { error: 'not found' }, 404);
+  P.db().prepare(`
+    UPDATE deals
+       SET state = 'open',
+           revisit_at = NULL,
+           parked_at = NULL,
+           revived_at = datetime('now'),
+           updated_at = datetime('now')
+     WHERE id = ?
+  `).run(dealId);
+  json(res, { ok: true, deal_id: dealId });
+});
+
 // Pipeline snapshot — one-line answer to "what deals do I have right now"
 // Used by the banner at the top of Today. Cheap aggregation.
 route('GET', '/api/pipeline-snapshot', async (req, res, { url }) => {
@@ -131,10 +255,150 @@ route('GET', '/api/money', async (req, res, { url }) => {
   json(res, P.data.moneySummary({ creator: url.searchParams.get('creator') || undefined }));
 });
 
+// Morning Brief: the "what fires today" hero. Three sections:
+//   - todo: top 5-7 actionable items ranked by urgency (red→amber→green)
+//   - done_today: recent outbound (last 24h) so Riley sees what he's done
+//   - needs_eyes: brand inbound waiting on him (last 36h, ball-on-us)
+// Reuses /api/this-week data but re-orders for hero presentation.
+route('GET', '/api/morning-brief', async (req, res, { url }) => {
+  const creator = url.searchParams.get('creator') || 'cooper';
+  try {
+    // Pull the canonical this-week data — it already has actions + last_outbound
+    const twRes = await fetch(`http://localhost:${PORT}/api/this-week?creator=${encodeURIComponent(creator)}`);
+    const tw = await twRes.json();
+    const all = [...(tw.deals || []), ...(tw.pending || [])];
+
+    // TODO LIST: extract every open (not-completed) action across all deals,
+    // tagged with the deal's brand + fee + urgency tier.
+    //
+    // CRITICAL FILTER: if Riley has acted on a deal in the last 12h, suppress
+    // ALL its open actions. The action checklist is its own state and doesn't
+    // know that he just emailed/whatsapped the brand. Without this filter the
+    // brief shows "Check in with John about GoMarble" RIGHT AFTER he just
+    // nudged John, which makes the platform look dumb.
+    //
+    // Non-communication action kinds (post, sign, deliver, film, invoice)
+    // stay even with recent outbound because those are independent tasks.
+    const tierRank = { red: 0, amber: 1, green: 2, blue: 3 };
+    const PRODUCTION_KINDS = new Set(['post','sign','deliver','film','upload_raw','invoice','submit','submit_concept','submit_draft','script','review','approval','revision']);
+    const todoRaw = [];
+    const suppressedDeals = [];
+    for (const d of all) {
+      const actedRecently = d.last_outbound && d.last_outbound.age_hours != null && d.last_outbound.age_hours < 24;
+      const paymentInFlight = !!d.payment_in_flight;
+      for (const a of (d.actions || [])) {
+        if (a.completed) continue;
+        const isProductionTask = PRODUCTION_KINDS.has((a.kind || '').toLowerCase());
+        const kindLower = (a.kind || '').toLowerCase();
+        const isPaymentAction = kindLower.includes('payment') || kindLower.includes('invoice')
+                              || /chase payment|pay|invoice/i.test(a.label || '');
+        // Suppress payment actions when payment is already routed via Lumanu/Wise/etc.
+        if (paymentInFlight && isPaymentAction) {
+          suppressedDeals.push({ deal_id: d.deal_id, brand: d.brand, action_label: a.label, reason: 'payment_in_flight' });
+          continue;
+        }
+        // Suppress communication-type actions if Riley acted recently
+        if (actedRecently && !isProductionTask) {
+          suppressedDeals.push({ deal_id: d.deal_id, brand: d.brand, action_label: a.label, reason: 'acted_recently' });
+          continue;
+        }
+        todoRaw.push({
+          deal_id: d.deal_id,
+          brand: d.brand,
+          fee_cents: d.fee_cents,
+          posting_date: d.posting_date,
+          funnel_stage: d.funnel_stage,
+          state: d.state,
+          action_kind: a.kind,
+          action_label: a.label,
+          action_detail: a.detail,
+          action_tier: a.tier || 'green',
+          action_date_label: a.date_label,
+        });
+      }
+    }
+    // Sort: tier first, then by fee descending (bigger deals surface earlier)
+    todoRaw.sort((a, b) => {
+      const t = (tierRank[a.action_tier] ?? 9) - (tierRank[b.action_tier] ?? 9);
+      if (t !== 0) return t;
+      return (b.fee_cents || 0) - (a.fee_cents || 0);
+    });
+    // Cap at top 8 so the brief doesn't sprawl
+    const todo = todoRaw.slice(0, 8);
+
+    // DONE TODAY: from last_outbound enrichment, filter to <24h
+    const doneToday = all
+      .filter(d => d.last_outbound && d.last_outbound.age_hours != null && d.last_outbound.age_hours < 24)
+      .map(d => ({
+        deal_id: d.deal_id,
+        brand: d.brand,
+        fee_cents: d.fee_cents,
+        kind: d.last_outbound.kind,
+        channel: d.last_outbound.channel,
+        age_hours: d.last_outbound.age_hours,
+      }))
+      .sort((a, b) => (a.age_hours || 0) - (b.age_hours || 0));
+
+    // NEEDS EYES: brand replies waiting on us, last 36h, not yet acknowledged
+    const needsEyes = all
+      .filter(d => d.unread_reply && !d.last_outbound)  // brand replied + we haven't responded
+      .map(d => ({
+        deal_id: d.deal_id,
+        brand: d.brand,
+        fee_cents: d.fee_cents,
+        sender: d.unread_reply.sender,
+        channel: d.unread_reply.channel,
+        age_hours: d.unread_reply.age_hours,
+      }))
+      .sort((a, b) => (a.age_hours || 0) - (b.age_hours || 0));
+
+    json(res, {
+      creator,
+      todo,
+      done_today: doneToday,
+      needs_eyes: needsEyes,
+      counts: {
+        todo: todo.length,
+        done_today: doneToday.length,
+        needs_eyes: needsEyes.length,
+      },
+    });
+  } catch (e) {
+    json(res, { error: e.message }, 500);
+  }
+});
+
 // Money Pulse: monthly target progress + chase queue. Drives the homepage target
 // meter + the "stop quiet pipeline from rotting" auto-section. Target is $15K
 // per creator (configurable via cfg('target_monthly_cents_{creator}')). Chase
 // queue = deals with real $ that are quiet enough to be at risk.
+// Rolling-90d strategic forecast for a creator. Returns the sequenced plan
+// (top-EV pending deals assigned to open posting slots), weekly slot grid,
+// monthly buckets, and historical-blended close-rate scores per pending deal.
+// Cached in-process for 5 min so repeat hits don't re-fit the close-rate
+// table; /api/sync warms the cache.
+const FORECAST_CACHE = new Map(); // creator -> { forecast, ts }
+const FORECAST_TTL_MS = 5 * 60 * 1000;
+async function computeForecast(creator) {
+  const m = await import('./engines/forecaster.js');
+  return m.forecast(P.db(), creator);
+}
+route('GET', '/api/forecast', async (req, res, { url }) => {
+  const creator = url.searchParams.get('creator') || 'cooper';
+  const force   = url.searchParams.get('force') === '1';
+  const cached  = FORECAST_CACHE.get(creator);
+  if (!force && cached && (Date.now() - cached.ts) < FORECAST_TTL_MS) {
+    return json(res, { ...cached.forecast, cached: true });
+  }
+  try {
+    const forecast = await computeForecast(creator);
+    FORECAST_CACHE.set(creator, { forecast, ts: Date.now() });
+    json(res, { ...forecast, cached: false });
+  } catch (e) {
+    json(res, { error: e.message }, 500);
+  }
+});
+
 route('GET', '/api/money-pulse', async (req, res, { url }) => {
   const creator = url.searchParams.get('creator') || 'cooper';
   const targetCents = parseInt(P.cfg(`target_monthly_cents_${creator}`, '1500000'), 10);
@@ -489,12 +753,24 @@ route('GET', '/api/deals/([^/]+)/summary', async (req, res, { match, url }) => {
   const aiEnabled = P.cfg('ai_enabled','false') === 'true' && apiKey;
   if (!aiEnabled) return json(res, { summary: deal.next_action || '', cached:false, ai:false });
 
-  // Pull recent context: last 6 messages from the deal's threads (any channel)
+  // Pull recent context: last 8 messages from the deal's threads (any channel).
+  // 8 not 6 so we catch multi-round back-and-forth on rate negotiations.
   const recent = P.db().prepare(`
     SELECT m.channel, m.sender, m.from_us, m.sent_at, m.body, m.snippet
     FROM messages m JOIN threads t ON t.id = m.thread_id
     WHERE t.deal_id = ?
-    ORDER BY m.sent_at DESC LIMIT 6`).all(deal.id).reverse();
+    ORDER BY m.sent_at DESC LIMIT 8`).all(deal.id).reverse();
+
+  // Strip Gmail quoted-reply chains BEFORE passing bodies to the AI — otherwise
+  // each brand reply carries Riley's prior outbound underneath, and the AI
+  // anchors on stale text inside the quote block.
+  const cleanBody = (m) => {
+    let body = m.body || m.snippet || '';
+    if (m.channel === 'email' && body) {
+      try { body = stripQuotedReply(body) || body; } catch {}
+    }
+    return body.replace(/\s+/g, ' ').slice(0, 400);
+  };
 
   // Also pull recent messages from the INTERNAL creator chat (COOPER X TRIIBE
   // / CHARLIE X TRIIBE) — these aren't linked to a deal_id but often contain
@@ -511,38 +787,103 @@ route('GET', '/api/deals/([^/]+)/summary', async (req, res, { match, url }) => {
       ORDER BY m.sent_at DESC LIMIT 8`).all(chatRe).reverse();
   }
 
-  const sys = `Summarize where this brand deal stands in 1-2 short sentences. PLAIN ENGLISH, conversational, like you're updating a teammate at the coffee machine.
-Mention: who owes the next move, what they owe, and the most recent meaningful event. Avoid jargon and avoid the word "deal".
-CROSS-REFERENCE the brand thread WITH the internal creator chat. If the brand thinks they're waiting on us but the creator hasn't delivered the updated asset yet, say so ("ball is on the creator — waiting for revised cut before we can send to brand"). If the creator confirmed delivery but the brand hasn't replied, say that.
-CRITICALLY IMPORTANT: check the LAST message in the brand thread carefully. If RILEY's message is more recent than the brand's last reply, you MUST say "Riley already followed up on <date>" — never say "no movement on our end yet" when there clearly is. Look at the from_us flag.
-NO lists. NO headings. NO emojis. NO "Riley" in third person. Just the two sentences.
-Examples of good output:
-"Waiting on Keyshe — she's still getting client feedback on Cooper's revised script. Last update was Jun 5."
-"Charlie still owes the recut. Wilhelm's note about client edits came in Jun 5; Charlie said today he'd have it done — nothing sent back to the brand yet."
-"Roshni has the raw footage and your payment info — net-30 starts now, payment due Jul 5."
-"Higgsfield is pitching the package internally. You nudged on Jun 3 with a date-specific anchor — still waiting on their team's call."`;
+  // Identify the LAST brand message — the summary MUST anchor on its actual
+  // content rather than parroting stale next_action_detail or generic
+  // "waiting on brand" templates.
+  const lastBrandMsg = [...recent].reverse().find(m => !m.from_us) || null;
+  const lastOurMsg   = [...recent].reverse().find(m => m.from_us) || null;
+  const brandIsMostRecent = !!(lastBrandMsg && (!lastOurMsg || lastBrandMsg.sent_at > lastOurMsg.sent_at));
+
+  // Blank stale next_action_detail when it predates the latest brand reply.
+  // Otherwise the AI weights "brand responded positively, sent terms" (written
+  // a week ago by the auto-tagger) over what the brand actually just said.
+  const noteDateMatch = (deal.next_action_detail || '').match(/\[(\d{1,2})\/(\d{1,2})\]/);
+  let noteIsStale = false;
+  if (noteDateMatch && lastBrandMsg) {
+    const [, mm, dd] = noteDateMatch;
+    const noteDay = `2026-${mm.padStart(2,'0')}-${dd.padStart(2,'0')}`;
+    if (lastBrandMsg.sent_at.slice(0,10) > noteDay) noteIsStale = true;
+  } else if (deal.ai_summary_for && lastBrandMsg && lastBrandMsg.sent_at > deal.ai_summary_for) {
+    // Different fingerprint than what the note was written against → stale.
+    noteIsStale = true;
+  }
+  const rileyNote = noteIsStale ? '(prior note suppressed — predates latest brand reply)'
+                                : (deal.next_action_detail || deal.next_action || '').slice(0, 400);
+
+  const sys = `Summarize where this brand partnership stands in 1-2 short sentences. PLAIN ENGLISH, conversational, like updating a teammate at the coffee machine.
+
+THE LAST BRAND MESSAGE IS YOUR ANCHOR. Read it carefully and base the summary on what it actually says — not on stale notes, not on generic "waiting" templates.
+
+First, classify the LAST BRAND MESSAGE stance into one of:
+  - accepted: brand agreed to terms / signed off / approved
+  - countered: brand proposed a different number or terms
+  - declined_price: brand passing because rate is too high
+  - declined_timing: brand passing because of dates / posting window
+  - declined_other: brand passing for scope / fit / internal reasons
+  - asking_for_info: brand needs deliverables, codes, contract info, or clarification from us
+  - giving_feedback: brand sent edits / revisions / approval-with-changes
+  - silent_no_reply: there is no brand response after our last outbound
+
+Then write the summary. RULES:
+  - DEAL STATE IS GROUND TRUTH. Before reading thread evidence, check state + raw_stage:
+      - state=won + raw_stage=signed/contract_signed/contract_received → the deal IS CLOSED. NEVER say "waiting for signature" or "needs to sign". Describe what's next (script, draft, post, payment routing) based on the latest creator chat + brand thread.
+      - state=lost → the deal is dead, don't suggest action.
+      - state=open + funnel_stage=in_works/active → fulfillment phase; surface the specific deliverable owed (script, draft, post date, invoice).
+  - CREATOR CHAT IS AUTHORITATIVE for delivery, signing, and payment confirmations. If Cooper or Charlie tells Riley "Sintra signed" / "filming today" / "got the wire from Lumanu", that overrides the brand thread (which may not have caught up yet).
+  - PAYMENT routing via Lumanu / Wise / Payoneer = deal is essentially DONE, just waiting for clearance. Say "payment routing via Lumanu, just waiting for it to clear" — don't say "need to finalize content" if creator already delivered.
+  - If brand is the most recent sender, NEVER say "we haven't heard back" / "still waiting on brand" / "no response yet". You MUST reflect what they actually said.
+  - If brand declined on timing or scope, say that explicitly and what they offered for future ("wants to stay in touch when calendar opens").
+  - If brand accepted but ball is now on us for the next step, name what we owe (script / contract / payment info / brief reply).
+  - If brand is genuinely silent and only Riley's nudge is recent, say "you nudged on <date>, no reply yet".
+  - Use the contact's first name when relevant.
+  - NO lists, headings, emojis. NO third-person "Riley".
+
+GOOD EXAMPLES:
+"Lea passed on this round — the rate's fine but Cooper's July dates were too late for the campaign. She wants to stay in touch when his calendar opens back up."
+"Keyshe approved the script with one small edit and the draft is in MiniMax's hands for review. Ball's on them now."
+"Wilhelm is good on the recut you sent Jun 8 — he asked for the caption and hashtags, which still need to go over."
+"Higgsfield's agency hasn't replied since your Jun 3 nudge with the July 13 anchor. Worth one more push."
+"Mamita took the $6,000 counter back to Higgsfield for internal sign-off on May 26 — still no word. Time to nudge."`;
 
   const flagsList = (deal.flags || []).filter(f => /jun|jul|may|sent|received|signed|paid|delivered|pending|done|confirmed/.test(f)).slice(-8).join(', ');
-  const user = `BRAND: ${deal.brand}
+  const lastBrandLine = lastBrandMsg
+    ? `[${(lastBrandMsg.sent_at||'').slice(0,16).replace('T',' ')}] (${lastBrandMsg.channel}) ${lastBrandMsg.sender?.split('<')[0].trim().slice(0,30) || 'brand'}: ${cleanBody(lastBrandMsg)}`
+    : '(no brand message on file)';
+  // Ground-truth banner: if deal is won/signed, prepend an unambiguous statement
+  // so the AI can't get confused by brand-thread recency (e.g. "DocuSign sent"
+  // being interpreted as "waiting for signature" when Cooper has already signed).
+  let groundTruthBanner = '';
+  if (deal.state === 'won' && /signed|contract_signed|contract_received/.test(deal.raw_stage || '')) {
+    groundTruthBanner = `*** GROUND TRUTH: This deal is CLOSED. state=won, raw_stage=${deal.raw_stage}. Cooper/Charlie has already signed. DO NOT say "waiting for signature" or "Cooper needs to sign". Describe what's NEXT (script, draft, post, payment). ***\n\n`;
+  } else if (deal.state === 'won') {
+    groundTruthBanner = `*** GROUND TRUTH: This deal is WON. state=won. Describe the next fulfillment step, not the closing. ***\n\n`;
+  } else if (deal.state === 'lost') {
+    groundTruthBanner = `*** GROUND TRUTH: This deal is LOST. state=lost. The summary should say the deal is dead and why, no action needed. ***\n\n`;
+  }
+  const user = `${groundTruthBanner}BRAND: ${deal.brand}
 CONTACT: ${deal.contact_name || '(brand contact)'}
 STAGE: ${deal.funnel_stage} (${deal.raw_stage || ''}), state=${deal.state}
 BALL IN COURT: ${deal.ball_in_court || 'unclear'}
+WHO SENT THE LAST MESSAGE: ${brandIsMostRecent ? 'BRAND (their reply is the latest)' : (lastOurMsg ? 'RILEY (you sent the latest)' : 'unclear')}
 FEE: ${deal.fee_cents ? '$'+(deal.fee_cents/100).toLocaleString() : 'TBD'}
 RECENT FLAGS: ${flagsList || 'none'}
-RILEY'S NOTE: ${(deal.next_action_detail || deal.next_action || '').slice(0,400)}
+PRIOR NOTE (use only if recent): ${rileyNote}
 
-BRAND THREAD — last 6 msgs (oldest → newest):
+>>> LAST BRAND MESSAGE — anchor your summary on this:
+${lastBrandLine}
+
+BRAND THREAD — last ${recent.length} msgs (oldest → newest):
 ${recent.map(m => {
     const who = m.from_us ? 'Riley' : (m.sender ? m.sender.split('<')[0].trim().slice(0,25) : 'brand');
     const when = (m.sent_at || '').slice(0,16).replace('T',' ');
-    return `[${when}] (${m.channel}) ${who}: ${(m.body || m.snippet || '').replace(/\s+/g,' ').slice(0,300)}`;
+    return `[${when}] (${m.channel}) ${who}: ${cleanBody(m)}`;
   }).join('\n') || '(no recent messages ingested for this deal)'}
 
 INTERNAL CHAT WITH ${(deal.creator_id||'').toUpperCase()} — last ${creatorChat.length} msgs (oldest → newest, cross-reference this with brand thread to know what's actually been delivered):
 ${creatorChat.map(m => {
     const who = m.from_us ? 'Riley' : (deal.creator_id ? deal.creator_id[0].toUpperCase()+deal.creator_id.slice(1) : 'creator');
     const when = (m.sent_at || '').slice(0,16).replace('T',' ');
-    return `[${when}] ${who}: ${(m.body || m.snippet || '').replace(/\s+/g,' ').slice(0,300)}`;
+    return `[${when}] ${who}: ${cleanBody(m)}`;
   }).join('\n') || '(no recent internal chat)'}`;
 
   try {
@@ -685,6 +1026,23 @@ route('POST', '/api/drafts/([^/]+)/(approve|reject)', async (req, res, { match }
       P.data.setDraftStatus(id, 'sent');
       P.data.log({ who:'riley', action:'draft_sent', deal_id: draft.deal_id,
         summary: `→ ${sendRes.to}`, meta: { gmail_message_id: sendRes.id }});
+      // Re-pull the thread so the just-sent message lands in the local DB
+      // immediately. Without this, the conversation view doesn't show the
+      // send until the next full Gmail sync (~30s+).
+      try { await pullSingleThread(P.db(), draft.thread_id); } catch {}
+      // Post-send freshness: invalidate the AI summary cache so the next pill
+      // open re-narrates with the just-sent message, and queue a lifecycle
+      // audit so the verdict picks up the new state (often: ball flips,
+      // chase chip changes, step status updates).
+      try {
+        P.db().prepare(`UPDATE deals SET ai_summary_for = NULL WHERE id = ?`).run(draft.deal_id);
+        const apiKey = process.env.OPENAI_API_KEY;
+        if (apiKey && P.cfg('ai_enabled','false') === 'true') {
+          const { queueAudit } = await import('./engines/lifecycle_audit.js');
+          const dealRow = P.db().prepare(`SELECT * FROM deals WHERE id = ?`).get(draft.deal_id);
+          if (dealRow) queueAudit({ db: P.db(), deal: dealRow, apiKey, spend: P.spend });
+        }
+      } catch {}
       return json(res, { ok:true, sent:true, ...sendRes });
     } catch (e) {
       return json(res, { ok:false, error: e.message }, 500);
@@ -712,11 +1070,15 @@ route('GET', '/api/creator-chat/([^/]+)', async (req, res, { match, url }) => {
            media_type, media_path, media_mime, media_filename, media_size
     FROM messages WHERE thread_id = ?
     ORDER BY sent_at DESC LIMIT ?`).all(thread.id, limit).reverse();
-  // Count unread = messages from creator after our last reply
+  // Unread watermark: whichever is MORE RECENT — our last reply OR an explicit
+  // "I've read up to here" stamp from when Riley opens the pill. The stamp
+  // means "I saw these even though I haven't sent a reply yet."
   const lastUsAt = P.db().prepare(`SELECT MAX(sent_at) m FROM messages
     WHERE thread_id=? AND from_us=1`).get(thread.id).m;
-  const unread = lastUsAt
-    ? messages.filter(m => !m.from_us && m.sent_at > lastUsAt).length
+  const readThrough = thread.read_through_at || null;
+  const watermark = [lastUsAt, readThrough].filter(Boolean).sort().pop() || null;
+  const unread = watermark
+    ? messages.filter(m => !m.from_us && m.sent_at > watermark).length
     : messages.filter(m => !m.from_us).length;
   json(res, {
     chat_name: thread.subject,
@@ -724,6 +1086,22 @@ route('GET', '/api/creator-chat/([^/]+)', async (req, res, { match, url }) => {
     ball_in_court: thread.ball_in_court,
     messages, total: messages.length, unread,
   });
+});
+
+// Mark the creator chat as read up to now — called when Riley opens the pill.
+// Stops the "1 new" badge from re-appearing on the next 30s refresh.
+route('POST', '/api/creator-chat/([^/]+)/mark-read', async (req, res, { match }) => {
+  const creator = match[1].toLowerCase();
+  if (!['cooper','charlie'].includes(creator))
+    return json(res, { error:'unknown creator' }, 400);
+  const chatNameLike = `%${creator.toUpperCase()} X TRIIBE%`;
+  const thread = P.db().prepare(`SELECT id FROM threads
+    WHERE channel='whatsapp' AND subject LIKE ?
+    ORDER BY last_message_at DESC LIMIT 1`).get(chatNameLike);
+  if (!thread) return json(res, { ok:false, reason:'no thread' });
+  const now = new Date().toISOString();
+  P.db().prepare(`UPDATE threads SET read_through_at = ? WHERE id = ?`).run(now, thread.id);
+  json(res, { ok:true, read_through_at: now });
 });
 
 // AI-suggested reply for the creator chat — uses last 10 messages + ALL of
@@ -751,21 +1129,40 @@ route('POST', '/api/creator-chat/([^/]+)/suggest', async (req, res, { match }) =
     .sort((a,b) => (b.fee_cents||0) - (a.fee_cents||0))
     .slice(0, 20); // top 20 by fee to keep prompt manageable
 
-  // 3. For each deal: latest brand message + AI summary if cached
+  // 3. For each deal: AI summary, parsed contract obligations, posting date,
+  // and the last 2 brand messages. This gives the AI enough grounding to
+  // answer "can we post X without approval?" / "what does brand X want?"
+  // questions without making things up.
   const ctxLines = [];
   for (const d of deals) {
-    const latestBrand = P.db().prepare(`SELECT m.sender, m.sent_at, m.body, m.snippet
+    const latestBrandMsgs = P.db().prepare(`SELECT m.sender, m.sent_at, m.body, m.snippet
       FROM messages m JOIN threads t ON t.id=m.thread_id
-      WHERE t.deal_id=? AND m.from_us=0 ORDER BY m.sent_at DESC LIMIT 1`).get(d.id);
+      WHERE t.deal_id=? AND m.from_us=0 ORDER BY m.sent_at DESC LIMIT 2`).all(d.id).reverse();
     const fee = d.fee_cents ? '$' + (d.fee_cents/100).toLocaleString() : 'TBD';
     const stage = d.state === 'won' ? 'SIGNED' : d.funnel_stage;
     let line = `• ${d.brand} (${fee}, ${stage})`;
+    if (d.posting_date) line += ` · posts ${d.posting_date.slice(0,10)}`;
     if (d.ai_summary) line += `: ${d.ai_summary}`;
     else if (d.next_action) line += `: ${d.next_action}`;
-    if (latestBrand) {
-      const when = (latestBrand.sent_at||'').slice(0,10);
-      const who = (latestBrand.sender||'').split('<')[0].trim().slice(0,30) || 'brand';
-      const txt = (latestBrand.body || latestBrand.snippet || '').replace(/\s+/g,' ').slice(0,200);
+    // Contract obligations — what the brand actually requires. Critical for
+    // "do we need approval before posting?" type questions Cooper asks.
+    if (d.obligations) {
+      let obs = null;
+      try { obs = JSON.parse(d.obligations); } catch {}
+      if (Array.isArray(obs) && obs.length) {
+        const compact = obs.slice(0, 6).map(o => {
+          if (typeof o === 'string') return o.slice(0, 100);
+          const label = o.label || o.title || o.task || '';
+          const detail = o.detail || o.description || '';
+          return `${label}${detail ? ': ' + detail : ''}`.slice(0, 120);
+        }).filter(Boolean);
+        if (compact.length) line += `\n   contract: ${compact.join(' | ')}`;
+      }
+    }
+    for (const m of latestBrandMsgs) {
+      const when = (m.sent_at||'').slice(0,10);
+      const who = (m.sender||'').split('<')[0].trim().slice(0,30) || 'brand';
+      const txt = (m.body || m.snippet || '').replace(/\s+/g,' ').slice(0,180);
       line += `\n   ↳ ${who} ${when}: "${txt}"`;
     }
     ctxLines.push(line);
@@ -773,17 +1170,23 @@ route('POST', '/api/creator-chat/([^/]+)/suggest', async (req, res, { match }) =
 
   const cap = creator[0].toUpperCase() + creator.slice(1);
   const sys = `You are Riley texting ${cap} on WhatsApp. ${cap} is a creator you manage at Triibe.
-TONE: super casual, like texting a teammate. Short — 1-2 sentences usually. No greeting, no signoff, no formal language.
-HARD RULES:
-- NEVER use emojis. Riley does not use emojis.
-- No "Hey", no "Hope you're well", no "Best", no "Thanks!" — just answer.
-- Lowercase is fine, contractions are fine ("we're", "they're", "i'll").
-- Riley's vocab: "yeah", "nah", "honestly", "tbh", "for sure", "appreciate it", "got it", "all good", "lmk", "rn", "we good", "they want", "still waiting on".
-- Sound like a guy who played D1 hockey texting his buddy, not a corporate manager.
-- If you don't know something, say "lmk and i'll check" or "let me look into it".
 
-You have FULL knowledge of every brand deal in ${cap}'s pipeline below. When ${cap} asks "any update on X?", answer with the ACTUAL current state of X — what's done, what's pending, the latest brand reply if any. Don't make up details.
-Reply directly to ${cap}'s last message.`;
+TONE: short, casual, teammate-to-teammate. 1-3 sentences max. Reply directly to ${cap}'s last message.
+
+HARD ACCURACY RULES — IF YOU BREAK ONE, RILEY HAS TO MANUALLY FIX IT:
+- ONLY say things that are explicitly grounded in the deal pipeline data below. If a contract term, posting date, brand reply, or status isn't in the data, DO NOT invent it.
+- If ${cap} asks something you can't answer from the data ("when does X pay?", "what's in the contract?"), say "lmk and i'll check" or "let me look into it" — do not guess.
+- When citing a brand reply, paraphrase what they actually said. Do not invent quotes.
+- When ${cap} asks "can we post without approval?" or similar, check the contract obligations on the relevant deal. If the contract requires approval before posting, say so — that's how Riley protects the deal.
+
+VOICE:
+- No greeting ("Hey"), no signoff ("Best", "Thanks!") — Riley jumps straight to the answer.
+- Contractions are fine ("we're", "they're", "i'll"). Lowercase is fine when natural.
+- Vocab Riley actually uses: "yeah", "nah", "honestly", "tbh", "for sure", "appreciate it", "got it", "all good", "lmk", "rn", "we good", "they want", "still waiting on", "I know man", "for once".
+- Emojis: avoid by default. Rare 🤣 is OK if ${cap} sent something funny — never more than one.
+- Sound like a guy who played D1 hockey texting his buddy, not a corporate manager.
+
+You have FULL knowledge of every brand deal in ${cap}'s pipeline below. When ${cap} asks "any update on X?", answer with the ACTUAL current state of X — what's done, what's pending, the latest brand reply if any.`;
 
   const user = `${cap}'S ACTIVE DEAL PIPELINE (full context — use this when answering):
 ${ctxLines.join('\n\n')}
@@ -802,7 +1205,7 @@ Write Riley's WhatsApp reply.`;
   try {
     const r = await fetch('https://api.openai.com/v1/chat/completions', {
       method:'POST', headers:{'Authorization':`Bearer ${apiKey}`,'Content-Type':'application/json'},
-      body: JSON.stringify({ model:'gpt-4o', temperature:0.5, max_tokens:300,
+      body: JSON.stringify({ model:'gpt-4o', temperature:0.3, max_tokens:240,
         messages:[{role:'system',content:sys},{role:'user',content:user}]}),
     });
     const data = await r.json();
@@ -1522,6 +1925,202 @@ route('POST', '/api/can-we-do', async (req, res) => {
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 const pexec = promisify(execFile);
+// Tell the desk — strategic Q&A. Builds a compact snapshot of every active
+// deal (summary, ball, days quiet, chase status, key dates, contact, last
+// brand intent) + this month's money pulse, hands to GPT with a strategist
+// system prompt that knows Riley's voice. Returns a 1–3 paragraph answer
+// referencing specific brands by name with the recommended action.
+route('POST', '/api/desk/ask', async (req, res) => {
+  let body = '';
+  for await (const c of req) body += c;
+  const { question, history, creator } = JSON.parse(body || '{}');
+  if (!question || !question.trim()) return json(res, { error: 'no question' }, 400);
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey || P.cfg('ai_enabled','false') !== 'true') {
+    return json(res, { error: 'AI disabled' }, 503);
+  }
+  const targetCreator = (creator || 'cooper').toLowerCase();
+
+  // Pull this-week (confirmed + pending) + chase metadata so the prompt has
+  // everything the homepage shows + the AI summaries it has cached.
+  let tw = null;
+  try {
+    const r = await fetch(`http://localhost:${PORT}/api/this-week?creator=${encodeURIComponent(targetCreator)}`);
+    if (r.ok) tw = await r.json();
+  } catch {}
+
+  // Money pulse — target progress.
+  let mp = null;
+  try {
+    const r = await fetch(`http://localhost:${PORT}/api/money-pulse?creator=${encodeURIComponent(targetCreator)}`);
+    if (r.ok) mp = await r.json();
+  } catch {}
+
+  // Build compact deal lines: brand · stage · fee · ball · days quiet · chase
+  // · post date · last summary (truncated). One line per deal, max 25 deals.
+  const formatDeal = (d) => {
+    const fee = d.fee_cents ? `$${(d.fee_cents/100/1000).toFixed(1)}K` : 'no$';
+    const ball = d.ball_in_court === 'brand' ? 'ball:brand' :
+                 d.ball_in_court === 'us' || d.ball_in_court === 'riley' ? 'ball:us' : 'ball:?';
+    const chase = d.chase ? `${d.chase.kind === 'we_owe' ? 'WE_OWE' : 'STALLED'} ${d.chase.days_quiet}d` : '';
+    const kd = d.key_dates || {};
+    const dates = [
+      kd.post && `post:${kd.post}`, kd.script_due && `script:${kd.script_due}`,
+      kd.draft_due && `draft:${kd.draft_due}`, kd.payment_due && `pay:${kd.payment_due}`,
+    ].filter(Boolean).join(' ');
+    const deal = P.db().prepare(`SELECT ai_summary, contact_name FROM deals WHERE id=?`).get(d.deal_id);
+    const summary = (deal?.ai_summary || '').replace(/\s+/g,' ').slice(0, 220);
+    const contact = deal?.contact_name || '?';
+    // How recently Riley sent an outbound to this deal — critical signal so
+    // the desk doesn't suggest a fresh nudge for something he just nudged.
+    const lastOurs = P.db().prepare(`SELECT MAX(m.sent_at) AS t
+      FROM messages m JOIN threads t ON t.id=m.thread_id
+      WHERE t.deal_id=? AND m.from_us=1`).get(d.deal_id);
+    const lastOurAt = lastOurs?.t || null;
+    const hoursSinceOurs = lastOurAt
+      ? Math.floor((Date.now() - new Date(lastOurAt).getTime()) / 3_600_000)
+      : null;
+    const youSent = hoursSinceOurs == null ? 'never'
+      : hoursSinceOurs < 24 ? `${hoursSinceOurs}h ago`
+      : `${Math.floor(hoursSinceOurs/24)}d ago`;
+    return `- [${d.deal_id}] ${d.brand} · ${d.state}/${d.raw_stage} · ${fee} · ${ball} · ${chase} · contact:${contact} · you_last_sent:${youSent} ${dates ? '· ' + dates : ''}\n    last: ${summary}`;
+  };
+  // Partition pending deals by recent action. Anything you nudged in the last
+  // 48h goes into a "do-not-suggest" sidebar so the AI sees the state but
+  // can't recommend chasing it again until the brand has had time to reply.
+  const partition = (list) => {
+    const live = [], recent = [];
+    (list || []).forEach(d => {
+      const lastOurs = P.db().prepare(`SELECT MAX(m.sent_at) AS t
+        FROM messages m JOIN threads t ON t.id=m.thread_id
+        WHERE t.deal_id=? AND m.from_us=1`).get(d.deal_id);
+      const hoursSinceOurs = lastOurs?.t
+        ? Math.floor((Date.now() - new Date(lastOurs.t).getTime()) / 3_600_000)
+        : null;
+      if (hoursSinceOurs != null && hoursSinceOurs < 48) recent.push(d);
+      else live.push(d);
+    });
+    return { live, recent };
+  };
+  const conf = partition(tw?.deals);
+  const pend = partition(tw?.pending);
+  const confirmed = conf.live.slice(0, 12).map(formatDeal).join('\n');
+  const pending   = pend.live.slice(0, 15).map(formatDeal).join('\n');
+  const recentlyActed = [...conf.recent, ...pend.recent].slice(0, 10).map(formatDeal).join('\n');
+
+  const pulse = mp ? `MTD: $${Math.round((mp.booked_cents||0)/100)} booked of $${Math.round((mp.target_cents||0)/100)} target (${mp.pct}%, pace ${mp.expected_pct}%). Projected with open pitches: $${Math.round((mp.projected_cents||0)/100)}.` : 'pulse unavailable';
+
+  const sys = `You are the strategic desk for Riley Wallack — brand-partnership manager at Triibe Talents for hockey creator Cooper Simson (and Charlie). Riley wants short, direct, ACTIONABLE answers.
+
+YOU KNOW: every active deal (brand, fee, stage, ball, days quiet, chase urgency, key dates, AI summary) + this month's booking pace vs $15K target.
+
+YOUR JOB — first detect what KIND of question Riley is asking, then pick brands from the right block:
+
+INTENT A — SALES/PIPELINE ("who should I hit up", "what should I close", "what pitches to push"):
+  → Pick from PENDING. These are deals not yet locked in.
+
+INTENT B — FULFILLMENT/ACTIVE-DEAL WORK ("what do I owe today", "what's owed on Cooper's active deals", "keep Coop aligned with active brand deals", "what's left to do on signed deals"):
+  → Pick from CONFIRMED. These are signed/in-works deals where Riley owes a deliverable (script feedback, draft review, post lock-in, invoice, payment chase). Read each deal's "last: <summary>" carefully — if it mentions "waiting for Cooper to film" or "script needs revision" or "payment routing" or "draft owed", THAT is the action.
+
+INTENT C — STRATEGY/PACE: answer with the actual numbers from the totals.
+
+Specific brand question → give the read of where it stands + the next move regardless of block.
+
+DO NOT SUGGEST DEALS RILEY ALREADY ACTED ON:
+- Each deal line includes "you_last_sent:Xh ago" or "Xd ago".
+- If you_last_sent < 48h: DO NOT suggest another nudge or follow-up. Skip that deal entirely. Brand has not had time to reply yet.
+- If you_last_sent >= 48h AND ball is on brand: fair game to suggest a follow-up.
+- Exception: if Riley explicitly asks about that specific brand by name, give him the read even if he just acted on it.
+
+OUTPUT: return ONLY a JSON object with this exact shape:
+{
+  "intro": "1-sentence framing — what you found, the big picture",
+  "actions": [
+    { "deal_id": "<exact deal_id from the pipeline list>", "brand": "Brand name", "contact": "Contact first name or null", "why": "1-2 sentences citing the actual signal — days quiet, what brand said, money on table", "suggestion": "1-2 sentences with the literal message to send (or 'No reply yet' style action)" }
+  ]
+}
+
+If the question doesn't warrant per-deal actions (e.g. "am I behind pace"), return intro only with empty actions array.
+
+VOICE for intro + why + suggestion: short, direct, no em dashes, no "I recommend considering" — say "Hit up Mamita today, here's why." Use "you" not "Riley". Talk like a co-conspirator who's read everything.`;
+
+  const user = `${pulse}
+
+CONFIRMED (signed/in-works) deals:
+${confirmed || '(none)'}
+
+PENDING (negotiating, chase, follow-up) deals — these are the deals you may suggest actions for:
+${pending || '(none)'}
+
+RECENTLY ACTED (Riley already nudged in last 48h — DO NOT suggest follow-ups for these. Only mention if asked by brand name):
+${recentlyActed || '(none)'}
+
+${history && history.length ? `PRIOR TURNS (oldest first):\n${history.slice(-6).map(t => `${t.role==='user'?'Riley':'Desk'}: ${typeof t.content === 'string' ? t.content : JSON.stringify(t.content)}`).join('\n')}\n\n` : ''}Riley's question: ${question}
+
+Return the JSON object now. Pick specific brands and use exact deal_ids from the lists above.`;
+
+  try {
+    const r = await fetch('https://api.openai.com/v1/chat/completions', {
+      method:'POST', headers:{'Authorization':`Bearer ${apiKey}`,'Content-Type':'application/json'},
+      body: JSON.stringify({ model:'gpt-4o-mini', temperature:0.4, max_tokens:900,
+        response_format: { type: 'json_object' },
+        messages:[{role:'system',content:sys},{role:'user',content:user}]}),
+    });
+    if (!r.ok) {
+      const txt = await r.text().catch(()=>'');
+      return json(res, { error:'ai err', detail:txt.slice(0,200) }, 502);
+    }
+    const data = await r.json();
+    const raw = data.choices?.[0]?.message?.content?.trim() || '{}';
+    let parsed = { intro: '', actions: [] };
+    try { parsed = JSON.parse(raw); } catch {}
+    // Validate + sanitize. Drop actions whose deal_id isn't a real deal so we
+    // don't hand the UI dead links.
+    const validIds = new Set([...(tw?.deals || []), ...(tw?.pending || [])].map(d => d.deal_id));
+    const cleanActions = (parsed.actions || []).filter(a => a && a.deal_id && validIds.has(a.deal_id))
+      .map(a => ({
+        deal_id: String(a.deal_id),
+        brand: String(a.brand || '').slice(0, 80),
+        contact: a.contact ? String(a.contact).slice(0, 40) : null,
+        why: String(a.why || '').slice(0, 400),
+        suggestion: String(a.suggestion || '').slice(0, 600),
+      })).slice(0, 6);
+    const usage = data.usage || {};
+    P.spend?.record?.({
+      provider:'openai', model:'gpt-4o-mini', operation:'desk_ask',
+      prompt_tokens: usage.prompt_tokens||0, completion_tokens: usage.completion_tokens||0,
+      est_cost_cents: Math.ceil(((usage.prompt_tokens||0)*0.000015 + (usage.completion_tokens||0)*0.00006) * 100),
+    });
+    json(res, {
+      intro: String(parsed.intro || '').slice(0, 600),
+      actions: cleanActions,
+    });
+  } catch (e) {
+    json(res, { error: e.message }, 500);
+  }
+});
+
+// Tell the desk — check whether any of the suggested actions have already
+// been acted on. For each {deal_id, since}, returns acted=true if Riley has
+// any outbound message to that deal newer than `since`. The desk UI uses
+// this to grey out / strike through action pills the moment Riley sends a
+// reply or nudge, so the list visibly shrinks as he works through it.
+route('POST', '/api/desk/check-actions', async (req, res) => {
+  let body = '';
+  for await (const c of req) body += c;
+  const items = JSON.parse(body || '[]');
+  if (!Array.isArray(items)) return json(res, []);
+  const out = items.map(it => {
+    const r = P.db().prepare(`
+      SELECT MAX(m.sent_at) AS acted_at
+      FROM messages m JOIN threads t ON t.id = m.thread_id
+      WHERE t.deal_id = ? AND m.from_us = 1 AND m.sent_at > ?`)
+      .get(it.deal_id, it.since || '2000-01-01');
+    return { deal_id: it.deal_id, acted: !!r?.acted_at, acted_at: r?.acted_at || null };
+  });
+  json(res, out);
+});
+
 route('POST', '/api/sync', async (req, res) => {
   try {
     // copy the live file into our read-only snapshot, then re-migrate (UPSERT).
@@ -1564,9 +2163,36 @@ route('POST', '/api/sync', async (req, res) => {
     // Critical: without this, your own outbound replies that get re-indexed by
     // Gmail don't flip the ball back to brand, and Inbox lies to you.
     const reconciled = reconcileThreadStates({ db: P.db() });
+    // Queue AI lifecycle audits for any deal that had activity recently. The
+    // queue is debounced per-deal so a burst of msgs = one audit. This is the
+    // mechanism that makes the lifecycle checklist auto-update without manual
+    // checkboxes — every brand reply or outbound triggers a re-audit ~30s
+    // after it lands.
+    let lifecycleQueued = 0;
+    try {
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (apiKey && P.cfg('ai_enabled','false') === 'true') {
+        const { queueAudit } = await import('./engines/lifecycle_audit.js');
+        // Any deal touched in the last 5 minutes (covers Gmail + WA new activity)
+        const recentDeals = P.db().prepare(`
+          SELECT id, brand, creator_id, fee_cents, posting_date, funnel_stage,
+                 raw_stage, state, payment_terms_days
+          FROM deals
+          WHERE last_activity_at > datetime('now', '-5 minutes')
+            AND state != 'lost'
+            AND funnel_stage NOT IN ('cold','dormant')
+        `).all();
+        for (const d of recentDeals) {
+          queueAudit({ db: P.db(), deal: d, apiKey, spend: P.spend });
+          lifecycleQueued++;
+        }
+      }
+    } catch (e) {
+      console.warn('lifecycle audit queue err:', e.message);
+    }
     P.data.log({ who:'riley', action:'sync',
-      summary:'re-snapshot + re-migrate + ingest + live Gmail + WA backfill + reconcile',
-      meta: { ingest: ingestStats, gmail_live: gmailLive, wa_backfill: waBackfill, reconcile: reconciled } });
+      summary:'re-snapshot + re-migrate + ingest + live Gmail + WA backfill + reconcile + lifecycle audit queue',
+      meta: { ingest: ingestStats, gmail_live: gmailLive, wa_backfill: waBackfill, reconcile: reconciled, lifecycle_queued: lifecycleQueued } });
     json(res, { ok:true, log: stdout.trim().split('\n').slice(-8), ingest: ingestStats, gmail_live: gmailLive, wa_backfill: waBackfill, reconcile: reconciled });
   } catch (e) {
     json(res, { ok:false, error: e.message }, 500);
@@ -1577,6 +2203,49 @@ route('POST', '/api/sync', async (req, res) => {
 route('POST', '/api/reconcile', async (req, res) => {
   const r = reconcileThreadStates({ db: P.db() });
   json(res, { ok:true, ...r });
+});
+
+// Run AI audit on a single deal NOW (synchronous). Returns the verdict.
+// Used by the per-pill "🔍 Re-audit" button.
+route('POST', '/api/lifecycle/audit/([^/]+)', async (req, res, { match }) => {
+  const deal_id = decodeURIComponent(match[1]);
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return json(res, { ok:false, reason:'no OPENAI_API_KEY' }, 503);
+  const deal = P.db().prepare('SELECT * FROM deals WHERE id = ?').get(deal_id);
+  if (!deal) return json(res, { ok:false, reason:'deal not found' }, 404);
+  const { auditDealLifecycle } = await import('./engines/lifecycle_audit.js');
+  const verdict = await auditDealLifecycle({ db: P.db(), deal, apiKey, spend: P.spend });
+  if (!verdict) return json(res, { ok:false, reason:'audit failed (see server logs)' }, 500);
+  json(res, { ok:true, deal_id, verdict, audited_at: new Date().toISOString() });
+});
+
+// Bulk audit — runs audit on every active deal. Slow (~30s for 30 deals).
+// Used for one-time backfill so the cached lifecycle_state is populated.
+route('POST', '/api/lifecycle/audit-all', async (req, res) => {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) return json(res, { ok:false, reason:'no OPENAI_API_KEY' }, 503);
+  const { auditDealLifecycle } = await import('./engines/lifecycle_audit.js');
+  const active = P.db().prepare(`
+    SELECT * FROM deals
+    WHERE state != 'lost'
+      AND funnel_stage NOT IN ('cold','dormant')
+      AND (state = 'won' OR funnel_stage IN ('in_works','signed','agreed','active','pitching','conversation'))
+    ORDER BY last_activity_at DESC
+    LIMIT 100
+  `).all();
+  let done = 0, failed = 0;
+  // Throttle: ~1 audit per second so we don't burst the OpenAI rate limit
+  for (const deal of active) {
+    try {
+      const verdict = await auditDealLifecycle({ db: P.db(), deal, apiKey, spend: P.spend });
+      if (verdict) done++; else failed++;
+    } catch (e) {
+      failed++;
+      console.warn('audit-all err for', deal.id, e.message);
+    }
+    await new Promise(r => setTimeout(r, 200));
+  }
+  json(res, { ok:true, scanned: active.length, audited: done, failed });
 });
 
 // Bulk-classify brand messages that haven't been tagged yet.
@@ -1697,7 +2366,39 @@ route('POST', '/api/wa/send', async (req, res) => {
 });
 
 route('GET', '/api/wa/status', async (req, res) => {
-  json(res, { daemon_ready: await waDaemonReady() });
+  // Proxy the daemon's /status so the UI heartbeat can see last_event_at and
+  // detect silent stalls (daemon reports ready:true but no messages flow).
+  try {
+    const r = await fetch('http://localhost:4745/status', { signal: AbortSignal.timeout(2500) });
+    if (!r.ok) return json(res, { daemon_ready: false, reachable: false });
+    const d = await r.json();
+    const lastEventMs = d.last_event_at ? new Date(d.last_event_at).getTime() : null;
+    const stale_seconds = lastEventMs ? Math.floor((Date.now() - lastEventMs) / 1000) : null;
+    json(res, {
+      daemon_ready: !!d.ready,
+      reachable: true,
+      last_event_at: d.last_event_at || null,
+      stale_seconds,
+      qr_pending: !!d.qr_pending,
+    });
+  } catch (e) {
+    json(res, { daemon_ready: false, reachable: false, error: e.message });
+  }
+});
+
+// One-tap restart for the WA daemon — for when the UI flags it as stalled.
+// Uses launchctl to kick the launchd-managed service so auth state survives.
+route('POST', '/api/wa/restart', async (req, res) => {
+  try {
+    const { exec } = await import('node:child_process');
+    await new Promise((resolve, reject) => {
+      exec(`launchctl kickstart -k gui/$(id -u)/com.triibe.platform.whatsapp`,
+        { timeout: 8_000 }, (err) => err ? reject(err) : resolve());
+    });
+    json(res, { ok: true });
+  } catch (e) {
+    json(res, { ok: false, error: e.message }, 500);
+  }
 });
 
 // ---- Freshness ---------------------------------------------------------------
@@ -1799,8 +2500,21 @@ route('GET', '/api/this-week', async (req, res, { url }) => {
   const creator = url.searchParams.get('creator');
   if (!creator) return json(res, { deals: [] });
   const { buildThisWeek } = await import('./engines/this_week.js');
+  const { autoParkStaleDeals } = await import('./engines/auto_park.js');
   const apiKey = (P.cfg('ai_enabled','false') === 'true') ? process.env.OPENAI_API_KEY : null;
+  // Park revival — flip any dormant deal whose revisit date is here into 'open'
+  // BEFORE building this-week, so revived deals show up in Pitches the moment
+  // their wait period ends. Idempotent + cheap (single indexed UPDATE).
+  try { revivePastDueParked(P.db()); } catch {}
+  // Auto-park sweeper — opposite side of the revival coin. Quietly parks deals
+  // where brand has been silent ≥14d after ≥2 unanswered nudges, so Riley's
+  // pipeline doesn't accumulate dead-but-not-marked threads. Idempotent: only
+  // touches state=open deals matching the rule.
+  let autoParked = { parked: [], count: 0 };
+  try { autoParked = autoParkStaleDeals(P.db()); } catch (e) { console.error('auto_park:', e.message); }
   const data = await buildThisWeek({ db: P.db(), creator, apiKey, stripQuotedReply });
+  // Surface auto-park result on the response so the UI can show "3 deals parked"
+  if (autoParked.count) data.auto_parked = autoParked.parked;
 
   // Merge in deals with real money in motion → "Close These Deals":
   //   A. Rate-pitched with a brand $ counter on the table
@@ -1916,10 +2630,41 @@ route('GET', '/api/this-week', async (req, res, { url }) => {
           p.close_reasons = cs.reasons;
           p.close_blocked = cs.blocked;
         } catch {}
+        // Surface the AI summary so the Pitches card can show a 1-2 sentence
+        // "what brand said last + what I replied" without expanding the pill.
+        // Engine that writes this field is summary-engine A+B+C (task #157).
+        p.ai_summary = deal.ai_summary || null;
+      }
+      // Chase tagging — annotate EVERY pending deal (not just the ones built
+      // by buildThisWeek; the rate-pitched promoted ones get appended above
+      // without the engine-side tag). Same rules as the standalone chase queue:
+      // $1K+ + ball-on-us 4-30d OR ball-on-brand 5-21d.
+      const DAY = 86400_000;
+      for (const p of data.pending) {
+        const deal = P.db().prepare(`SELECT ball_in_court, last_activity_at FROM deals WHERE id=?`).get(p.deal_id);
+        if (!deal || !deal.last_activity_at) continue;
+        if ((p.fee_cents || 0) < 100_000) continue;
+        const daysQuiet = Math.floor((Date.now() - new Date(deal.last_activity_at).getTime()) / DAY);
+        const ballUs    = deal.ball_in_court === 'us' || deal.ball_in_court === 'riley';
+        const ballBrand = deal.ball_in_court === 'brand';
+        if (ballUs && daysQuiet >= 4 && daysQuiet <= 30) {
+          p.chase = { kind: 'we_owe', days_quiet: daysQuiet };
+        } else if (ballBrand && daysQuiet >= 5 && daysQuiet <= 21) {
+          p.chase = { kind: 'stalled', days_quiet: daysQuiet };
+        }
       }
       data.pending.sort((a, b) => {
-        // Blocked deals sink to the bottom regardless of score
+        // Blocked deals sink to the bottom regardless of anything else
         if (a.close_blocked !== b.close_blocked) return a.close_blocked ? 1 : -1;
+        // Chase candidates float to top: we_owe before stalled before normal
+        const chaseRank = (x) => x.chase?.kind === 'we_owe' ? 0
+                              : x.chase?.kind === 'stalled' ? 1
+                              : 2;
+        const ra = chaseRank(a), rb = chaseRank(b);
+        if (ra !== rb) return ra - rb;
+        // Within same chase tier: highest fee first for chase deals (money on
+        // the table dominates); close_score then fee for normal deals.
+        if (ra < 2) return (b.fee_cents || 0) - (a.fee_cents || 0);
         const aS = a.close_score ?? 5;
         const bS = b.close_score ?? 5;
         if (aS !== bS) return bS - aS;
@@ -2044,6 +2789,28 @@ route('GET', '/api/this-week', async (req, res, { url }) => {
     }
   } catch {}
 
+  // Replace each deal's terse "next 1-2 actions" with the FULL lifecycle
+  // pipeline (negotiate → script → film → draft → post → invoice → pay).
+  // Statuses (done/active/waiting/todo) are auto-inferred from last_outbound,
+  // unread_reply, posting_date, payment_in_flight — so as deal state advances,
+  // the checklist auto-rolls forward without manual intervention.
+  try {
+    const { buildLifecycle } = await import('./engines/lifecycle.js');
+    const applyLifecycle = (d) => {
+      const steps = buildLifecycle(d);
+      if (steps && steps.length) {
+        // Preserve action counts the UI shows in the header
+        d.actions = steps;
+        d.open_count = steps.filter(s => !s.completed).length;
+        d.completed_count = steps.filter(s => s.completed).length;
+      }
+    };
+    (data.deals || []).forEach(applyLifecycle);
+    (data.pending || []).forEach(applyLifecycle);
+  } catch (e) {
+    console.warn('lifecycle expansion failed:', e.message);
+  }
+
   json(res, data);
 });
 
@@ -2094,6 +2861,73 @@ route('GET', '/api/deals/([^/]+)/fit-score', async (req, res, { match }) => {
   const deal = P.data.getDeal(match[1]);
   if (!deal) return json(res, { error: 'not found' }, 404);
   json(res, computeFitScore({ deal, db: P.db() }));
+});
+
+// Per-deal rate negotiation parse — what's actually on the table.
+// Pulls latest brand msg + latest outbound, strips Gmail quoted-reply chains
+// (otherwise our prior $ leaks into the brand body), extracts $ figures.
+// When brand's number matches our ask, marks accepted=true so the UI can render
+// "Brand accepted $X" instead of duplicating the figure as a "counter".
+route('GET', '/api/deals/([^/]+)/negotiation', async (req, res, { match }) => {
+  const deal = P.data.getDeal(match[1]);
+  if (!deal) return json(res, { error: 'not found' }, 404);
+
+  const lb = P.db().prepare(`
+    SELECT m.body, m.snippet, m.sent_at, m.channel
+    FROM messages m JOIN threads t ON t.id = m.thread_id
+    WHERE t.deal_id = ? AND m.from_us = 0
+    ORDER BY m.sent_at DESC LIMIT 1`).get(deal.id);
+  const lo = P.db().prepare(`
+    SELECT m.body, m.snippet, m.sent_at, m.channel
+    FROM messages m JOIN threads t ON t.id = m.thread_id
+    WHERE t.deal_id = ? AND m.from_us = 1
+    ORDER BY m.sent_at DESC LIMIT 1`).get(deal.id);
+
+  const clean = (m) => {
+    if (!m) return '';
+    let b = m.body || m.snippet || '';
+    if (m.channel === 'email' && b) { try { b = stripQuotedReply(b) || b; } catch {} }
+    return b;
+  };
+  const lbClean = clean(lb);
+  const loClean = clean(lo);
+
+  // Highest $ figure in our last outbound — almost always the rate we proposed
+  // (catches deals where Riley pitched without setting fee_cents on the row).
+  const highestDollar = (text) => {
+    if (!text) return null;
+    const m = [...text.matchAll(/\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)(?!\d)/g)]
+      .map(x => Math.round(parseFloat(x[1].replace(/,/g,''))*100))
+      .filter(c => c >= 30000 && c <= 5000000);
+    return m.length ? Math.max(...m) : null;
+  };
+  const detectedFromOurs = highestDollar(loClean);
+  const ourCents = deal.fee_cents || detectedFromOurs || null;
+  const brandCents = highestDollar(lbClean);
+
+  // Distinguish accepted-our-rate from countered.
+  // Accepted: brand $ within 1% of our ask. Countered: different number.
+  let accepted = false, counterCents = null, deltaPct = null;
+  if (brandCents && ourCents) {
+    const diff = Math.abs(brandCents - ourCents) / ourCents;
+    if (diff <= 0.01) {
+      accepted = true;
+    } else {
+      counterCents = brandCents;
+      deltaPct = Math.round((brandCents - ourCents) / ourCents * 100);
+    }
+  }
+
+  json(res, {
+    deal_id: deal.id,
+    our_quote_cents: ourCents,
+    our_quote_inferred: !deal.fee_cents && !!detectedFromOurs,
+    brand_counter_cents: counterCents,
+    counter_delta_pct: deltaPct,
+    brand_accepted: accepted,
+    last_brand_at: lb?.sent_at || null,
+    last_our_at: lo?.sent_at || null,
+  });
 });
 
 function computeFitScore({ deal, db }) {
@@ -2233,11 +3067,18 @@ route('GET', '/api/rate-pitched', async (req, res, { url }) => {
   const enriched = deals.map(d => {
     const lb = latestBrand[d.id];
     const lo = latestOurs[d.id];
-    const counterCents = lb ? extractDollarCents(lb.body || lb.snippet || '') : null;
+    // Strip quoted-reply chains before scanning $ figures — otherwise our own
+    // counter-offer leaks into the brand's body via Gmail's "On ... wrote:"
+    // quote block and gets misread as a brand counter.
+    let lbBody = lb?.body || lb?.snippet || '';
+    if (lbBody) { try { lbBody = stripQuotedReply(lbBody) || lbBody; } catch {} }
+    let loBody = lo?.body || lo?.snippet || '';
+    if (loBody) { try { loBody = stripQuotedReply(loBody) || loBody; } catch {} }
+    const counterCents = lbBody ? extractDollarCents(lbBody) : null;
     // Our pitched rate: prefer explicit fee_cents on deal, fall back to highest
     // $ we mentioned in our latest outbound. This catches deals where Riley
     // pitched verbally without updating the deal row.
-    const detectedFromOurMsg = lo ? highestDollar(lo.body || lo.snippet || '') : null;
+    const detectedFromOurMsg = loBody ? highestDollar(loBody) : null;
     const ourCents = d.fee_cents || detectedFromOurMsg;
     const hasCounter = counterCents && ourCents && counterCents !== ourCents;
     const counterDelta = (hasCounter && ourCents)
@@ -2474,6 +3315,21 @@ route('POST', '/api/deals/([^/]+)/draft-and-send', async (req, res, { match }) =
       last_activity_by='us' WHERE id=?`).run(dealId);
     P.db().prepare(`UPDATE threads SET ball_in_court='them', last_message_at=datetime('now'),
       last_message_by='us' WHERE id=?`).run(thread.id);
+    // Backfill the just-sent message so the conversation view shows it
+    // immediately — otherwise Riley has to wait for the next Gmail sync.
+    try { await pullSingleThread(P.db(), thread.id); } catch {}
+    // Same post-send freshness pass as the draft-approve path: invalidate the
+    // AI summary cache + queue a lifecycle audit so the deal pill re-renders
+    // with the new state on next view.
+    try {
+      P.db().prepare(`UPDATE deals SET ai_summary_for = NULL WHERE id = ?`).run(dealId);
+      const apiKey = process.env.OPENAI_API_KEY;
+      if (apiKey && P.cfg('ai_enabled','false') === 'true') {
+        const { queueAudit } = await import('./engines/lifecycle_audit.js');
+        const dealRow = P.db().prepare(`SELECT * FROM deals WHERE id = ?`).get(dealId);
+        if (dealRow) queueAudit({ db: P.db(), deal: dealRow, apiKey, spend: P.spend });
+      }
+    } catch {}
     json(res, { ok:true, sent:true, ...sendRes });
   } catch (e) {
     json(res, { ok:false, reason: e.message }, 500);
@@ -3323,6 +4179,33 @@ server.listen(PORT, () => {
       console.log(`  reconcile: ${r.threads_updated} threads + ${r.deals_updated} deals refreshed from messages`);
     }
   } catch (e) { console.error('  reconcile failed:', e.message); }
+  // Forecaster — pre-warm cache on boot + every 10 min so /api/forecast
+  // hits return instantly. Recomputes from current pipeline state, so any
+  // deal changes (new send, audit promotion, etc.) propagate within 10 min.
+  try {
+    const warmForecast = async () => {
+      for (const creator of ['cooper', 'charlie']) {
+        try {
+          const f = await computeForecast(creator);
+          FORECAST_CACHE.set(creator, { forecast: f, ts: Date.now() });
+        } catch {}
+      }
+    };
+    warmForecast();
+    setInterval(warmForecast, 10 * 60 * 1000);
+    console.log('  forecaster: cache pre-warmed, refresh every 10min');
+  } catch (e) { console.warn('  forecaster boot err:', e.message); }
+  // Creator-chat propagator — bridges Cooper/Charlie WA chat updates to the
+  // lifecycle audit + AI summary pipelines so "Sintra signed" in WA flows
+  // through to that deal's pill without a manual nudge.
+  try {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (apiKey && P.cfg('ai_enabled','false') === 'true') {
+      import('./engines/creator_chat_propagator.js').then(m => {
+        m.startPropagator({ db: P.db(), apiKey, spend: P.spend });
+      }).catch(e => console.warn('  creator_chat_propagator failed:', e.message));
+    }
+  } catch (e) { console.warn('  creator_chat_propagator boot err:', e.message); }
   // Auto-refresh WhatsApp every 5 minutes — uses the bridge's saved session.
   const WA_AUTO = P.cfg('wa_auto_pull', 'true') === 'true';
   if (WA_AUTO) {
