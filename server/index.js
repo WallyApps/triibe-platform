@@ -4167,8 +4167,10 @@ function serveStatic(req, res, pathname) {
   res.end(readFileSync(p));
 }
 
-// ---- Server -----------------------------------------------------------------
-const server = createServer(async (req, res) => {
+// ---- Request handler --------------------------------------------------------
+// Shared by the standalone Node server AND the Vercel serverless adapter
+// (api/index.js). Exported so importing this module never binds a port.
+export async function handleRequest(req, res) {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
     for (const r of routes) {
@@ -4182,16 +4184,19 @@ const server = createServer(async (req, res) => {
     console.error(e);
     json(res, { error: e.message }, 500);
   }
-});
+}
 
-// Async startup: initialize the provider registry (config cache + idempotent
-// migrations) BEFORE the server starts serving requests. ESM top-level await.
-await ensureInit();
-P.reload();
-
-server.listen(PORT, async () => {
+// ---- Standalone server entry ------------------------------------------------
+// Runs ONLY when this file is executed directly (`node server/index.js`), not
+// when imported (e.g. on Vercel). Long-lived background intervals (forecaster,
+// WhatsApp auto-pull, propagator) live here — they have no place in serverless.
+export async function startServer() {
+  await ensureInit();
+  P.reload();
+  const server = createServer(handleRequest);
+  server.listen(PORT, async () => {
   console.log(`✓ Triibe Platform listening on http://localhost:${PORT}`);
-  console.log(`  data: sqlite (~/triibe-platform/data/triibe.db)`);
+  console.log(`  data: postgres (supabase via DATABASE_URL)`);
   console.log(`  ai:   ${(await P.spend.status()).enabled ? 'ENABLED' : 'OFF (kill switch)'}`);
   // Reconcile thread state on boot — heals any drift accumulated since last run
   try {
@@ -4241,4 +4246,11 @@ server.listen(PORT, async () => {
   } else {
     console.log('  wa:   auto-pull DISABLED (set wa_auto_pull=true in config to enable)');
   }
-});
+  });
+  return server;
+}
+
+// Only start a listening server when run directly — importing stays side-effect-free.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  await startServer();
+}
