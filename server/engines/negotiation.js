@@ -44,13 +44,13 @@ function cleanMsg(m) {
  *   • no brand $ yet → ourCents (or deal.fee_cents)
  *   • nothing at all → null (deal has no priced expectation)
  */
-export function parseNegotiation(db, deal) {
-  const lb = db.prepare(`
+export async function parseNegotiation(db, deal) {
+  const lb = await db.prepare(`
     SELECT m.body, m.snippet, m.sent_at, m.channel
     FROM messages m JOIN threads t ON t.id = m.thread_id
     WHERE t.deal_id = ? AND m.from_us = 0
     ORDER BY m.sent_at DESC LIMIT 1`).get(deal.id);
-  const lo = db.prepare(`
+  const lo = await db.prepare(`
     SELECT m.body, m.snippet, m.sent_at, m.channel
     FROM messages m JOIN threads t ON t.id = m.thread_id
     WHERE t.deal_id = ? AND m.from_us = 1

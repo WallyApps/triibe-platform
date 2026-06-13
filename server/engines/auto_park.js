@@ -16,10 +16,10 @@ const DEFAULT_MIN_SILENT_DAYS = 14;     // brand hasn't replied in N days
 const DEFAULT_MIN_OUR_NUDGES  = 2;      // we sent ≥N outbound after brand's last
 const DEFAULT_PARK_DAYS_OUT   = 60;     // auto-revive after 60 days
 
-export function findAutoParkCandidates(db, opts = {}) {
+export async function findAutoParkCandidates(db, opts = {}) {
   const minSilent  = opts.minSilentDays  ?? DEFAULT_MIN_SILENT_DAYS;
   const minNudges  = opts.minOurNudges   ?? DEFAULT_MIN_OUR_NUDGES;
-  return db.prepare(`
+  return await db.prepare(`
     WITH last_brand AS (
       SELECT t.deal_id, MAX(m.sent_at) AS brand_at
         FROM messages m JOIN threads t ON t.id = m.thread_id
@@ -52,9 +52,9 @@ export function findAutoParkCandidates(db, opts = {}) {
   `).all(minSilent, minNudges);
 }
 
-export function autoParkStaleDeals(db, opts = {}) {
+export async function autoParkStaleDeals(db, opts = {}) {
   const daysOut = opts.parkDaysOut ?? DEFAULT_PARK_DAYS_OUT;
-  const candidates = findAutoParkCandidates(db, opts);
+  const candidates = await findAutoParkCandidates(db, opts);
   if (!candidates.length) return { parked: [], count: 0 };
   const revisit = new Date();
   revisit.setDate(revisit.getDate() + daysOut);
@@ -72,7 +72,7 @@ export function autoParkStaleDeals(db, opts = {}) {
   const parked = [];
   for (const c of candidates) {
     const reason = `Auto-parked — brand silent ${c.days_silent} days after ${c.our_nudges} unanswered nudge${c.our_nudges === 1 ? '' : 's'}. Revisit ${revisitISO}.`;
-    const r = parkStmt.run(revisitISO, reason, c.id);
+    const r = await parkStmt.run(revisitISO, reason, c.id);
     if (r.changes) parked.push({ ...c, revisit_at: revisitISO, reason });
   }
   return { parked, count: parked.length };

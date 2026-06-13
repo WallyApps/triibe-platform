@@ -59,8 +59,8 @@ const ALPHA_SMOOTHING = 10;       // ~10 historical samples needed to fully outw
  * Returns a map of raw_stage → { n_won, n_total }.
  * Excludes dormant + open deals (still in flight).
  */
-export function fitHistoricalRates(db) {
-  const rows = db.prepare(`
+export async function fitHistoricalRates(db) {
+  const rows = await db.prepare(`
     SELECT raw_stage, state, COUNT(*) AS n
     FROM deals
     WHERE state IN ('won','lost')
@@ -114,7 +114,7 @@ export function scoreDeal(deal, historicalRates = {}) {
  * Score a list of deals at once. Caller passes deals; we run fitHistoricalRates
  * once and reuse for every score.
  */
-export function scoreDeals(db, deals) {
-  const rates = fitHistoricalRates(db);
+export async function scoreDeals(db, deals) {
+  const rates = await fitHistoricalRates(db);
   return deals.map(d => ({ ...d, ...scoreDeal(d, rates) }));
 }

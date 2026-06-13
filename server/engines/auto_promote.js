@@ -40,7 +40,7 @@ function parseNetDays(s) {
   return m ? parseInt(m[1], 10) : null;
 }
 
-function applyStage(db, deal, { raw_stage, fee_cents, payment_terms_days }) {
+async function applyStage(db, deal, { raw_stage, fee_cents, payment_terms_days }) {
   const derived = deriveFunnel(raw_stage);
   if (!derived) return null;
   // Coerce undefined → null so SQLite bind doesn't blow up on missing columns
@@ -48,7 +48,7 @@ function applyStage(db, deal, { raw_stage, fee_cents, payment_terms_days }) {
     ? fee_cents
     : (deal.fee_cents ?? null);
   const newPay = payment_terms_days || deal.payment_terms_days || null;
-  db.prepare(`UPDATE deals SET raw_stage=?, funnel_stage=?, state=?, fee_cents=?,
+  await db.prepare(`UPDATE deals SET raw_stage=?, funnel_stage=?, state=?, fee_cents=?,
     payment_terms_days=COALESCE(?, payment_terms_days),
     updated_at=datetime('now') WHERE id=?`)
     .run(raw_stage, derived.funnel_stage, derived.state, newFee, newPay, deal.id);
@@ -60,20 +60,20 @@ function applyStage(db, deal, { raw_stage, fee_cents, payment_terms_days }) {
   };
 }
 
-function logNotification(db, { kind, deal, title, body, snapshot, applied }) {
-  const r = db.prepare(`INSERT INTO notifications
+async function logNotification(db, { kind, deal, title, body, snapshot, applied }) {
+  const r = await db.prepare(`INSERT INTO notifications
     (kind, deal_id, title, body, prior_raw_stage, prior_funnel_stage, prior_state, prior_fee_cents,
      new_raw_stage, new_funnel_stage, new_state, new_fee_cents)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`)
     .run(kind, deal.id, title, body,
          snapshot.prior_raw_stage, snapshot.prior_funnel_stage, snapshot.prior_state, snapshot.prior_fee_cents,
          applied.new_raw_stage, applied.new_funnel_stage, applied.new_state, applied.new_fee_cents);
-  return r.lastInsertRowid;
+  return r.rows[0].id;
 }
 
 // TIER 1 — contract uploaded
 // Returns { promoted: bool, notification_id?: number, reason?: string }
-export function promoteFromContract({ db, deal, extracted }) {
+export async function promoteFromContract({ db, deal, extracted }) {
   if (!deal) return { promoted: false, reason: 'no deal' };
   // Already past in_works? leave it alone.
   if (deal.funnel_stage === 'in_works' && (deal.raw_stage === 'signed' || deal.raw_stage === 'contract_signed')) {
@@ -90,13 +90,13 @@ export function promoteFromContract({ db, deal, extracted }) {
   // contract_received is the safe default; a fully-signed contract usually shows
   // both parties signed in the text but we can't reliably tell from extraction.
   const raw_stage = 'contract_received';
-  const applied = applyStage(db, deal, { raw_stage, fee_cents, payment_terms_days });
+  const applied = await applyStage(db, deal, { raw_stage, fee_cents, payment_terms_days });
   if (!applied) return { promoted: false, reason: 'no funnel mapping' };
 
   const feeStr = applied.new_fee_cents ? '$' + (applied.new_fee_cents/100).toLocaleString() : 'fee TBD';
   const title = `📜 ${deal.brand} sent the contract`;
   const body  = `Locked at ${feeStr}. Moved to In Works.`;
-  const notification_id = logNotification(db, {
+  const notification_id = await logNotification(db, {
     kind: 'auto_promote_contract',
     deal, title, body, snapshot, applied
   });
@@ -128,7 +128,7 @@ function extractDollar(text) {
   return null;
 }
 
-export function promoteFromEmailSignal({ db, deal, msgText }) {
+export async function promoteFromEmailSignal({ db, deal, msgText }) {
   if (!deal || !msgText) return { promoted: false, reason: 'no input' };
   // Only auto-promote from rate_sent / negotiating — anything more advanced
   // (or already won) needs no help; anything earlier (conversation) is too risky.
@@ -154,13 +154,13 @@ export function promoteFromEmailSignal({ db, deal, msgText }) {
   if (!feeOk) return { promoted: false, reason: 'no fee confirmation' };
 
   const snapshot = snapshotDeal(deal);
-  const applied = applyStage(db, deal, { raw_stage: 'terms_agreed', fee_cents: inferredFee });
+  const applied = await applyStage(db, deal, { raw_stage: 'terms_agreed', fee_cents: inferredFee });
   if (!applied) return { promoted: false, reason: 'no funnel mapping' };
 
   const feeStr = applied.new_fee_cents ? '$' + (applied.new_fee_cents/100).toLocaleString() : 'fee TBD';
   const title = `💰 ${deal.brand} locked at ${feeStr}`;
   const body  = `Bumped to In Works — they confirmed terms.`;
-  const notification_id = logNotification(db, {
+  const notification_id = await logNotification(db, {
     kind: 'auto_promote_email',
     deal, title, body, snapshot, applied
   });
@@ -171,7 +171,7 @@ export function promoteFromEmailSignal({ db, deal, msgText }) {
 // Bumps deals from contract_received / terms_agreed / similar into signed/won
 // when the AI audit (which now reads creator-chat) sees a high-confidence
 // "contract signed" signal. Idempotent: skips deals already in won/signed.
-export function promoteFromAuditVerdict({ db, deal, verdict }) {
+export async function promoteFromAuditVerdict({ db, deal, verdict }) {
   if (!deal || !verdict) return { promoted: false, reason: 'no input' };
   // Skip if already won — nothing to do.
   if (deal.state === 'won' && /signed|posted|completed/.test(deal.raw_stage || '')) {
@@ -190,11 +190,11 @@ export function promoteFromAuditVerdict({ db, deal, verdict }) {
     return { promoted: false, reason: `stage ${deal.raw_stage} not eligible` };
   }
   const snapshot = snapshotDeal(deal);
-  const applied = applyStage(db, deal, { raw_stage: 'signed' });
+  const applied = await applyStage(db, deal, { raw_stage: 'signed' });
   if (!applied) return { promoted: false, reason: 'no funnel mapping' };
   const title = `✍️ ${deal.brand} signed`;
   const body  = `Audit found contract signed (${cs.evidence?.slice(0, 90) || 'high confidence'}). Bumped to signed/won.`;
-  const notification_id = logNotification(db, {
+  const notification_id = await logNotification(db, {
     kind: 'auto_promote_audit',
     deal, title, body, snapshot, applied
   });
@@ -209,8 +209,8 @@ export function promoteFromAuditVerdict({ db, deal, verdict }) {
 //      drop any messages/threads we created during promotion.
 //   2. Auto-promote (contract upload changes existing deal's stage): restore
 //      the prior stage/state/fee from the notification snapshot.
-export function undoPromotion({ db, notificationId }) {
-  const n = db.prepare(`SELECT * FROM notifications WHERE id=?`).get(notificationId);
+export async function undoPromotion({ db, notificationId }) {
+  const n = await db.prepare(`SELECT * FROM notifications WHERE id=?`).get(notificationId);
   if (!n) return { undone: false, reason: 'not found' };
   if (n.undone_at) return { undone: false, reason: 'already undone' };
 
@@ -218,33 +218,33 @@ export function undoPromotion({ db, notificationId }) {
   if (isFreshCreation && n.deal_id) {
     const dealId = n.deal_id;
     // Unlink any contracts pointing at this deal so they return to leads tray
-    db.prepare(`UPDATE contracts SET deal_id=NULL WHERE deal_id=?`).run(dealId);
+    await db.prepare(`UPDATE contracts SET deal_id=NULL WHERE deal_id=?`).run(dealId);
     // Unlink any threads we linked to this deal
-    db.prepare(`UPDATE threads SET deal_id=NULL WHERE deal_id=?`).run(dealId);
+    await db.prepare(`UPDATE threads SET deal_id=NULL WHERE deal_id=?`).run(dealId);
     // NULL deal_id on this + any other notifications referencing the deal,
     // so the FK constraint doesn't hold the deal alive.
-    db.prepare(`UPDATE notifications SET deal_id=NULL WHERE deal_id=?`).run(dealId);
+    await db.prepare(`UPDATE notifications SET deal_id=NULL WHERE deal_id=?`).run(dealId);
     // Delete the deal itself
-    db.prepare(`DELETE FROM deals WHERE id=?`).run(dealId);
+    await db.prepare(`DELETE FROM deals WHERE id=?`).run(dealId);
   } else {
     // Standard revert: restore prior stage/state/fee
-    db.prepare(`UPDATE deals SET raw_stage=?, funnel_stage=?, state=?, fee_cents=?,
+    await db.prepare(`UPDATE deals SET raw_stage=?, funnel_stage=?, state=?, fee_cents=?,
       updated_at=datetime('now') WHERE id=?`)
       .run(n.prior_raw_stage, n.prior_funnel_stage, n.prior_state, n.prior_fee_cents, n.deal_id);
   }
-  db.prepare(`UPDATE notifications SET undone_at=datetime('now') WHERE id=?`).run(notificationId);
+  await db.prepare(`UPDATE notifications SET undone_at=datetime('now') WHERE id=?`).run(notificationId);
   return { undone: true };
 }
 
-export function listActiveNotifications({ db, hours = 48 }) {
-  return db.prepare(`SELECT * FROM notifications
+export async function listActiveNotifications({ db, hours = 48 }) {
+  return await db.prepare(`SELECT * FROM notifications
     WHERE dismissed_at IS NULL AND undone_at IS NULL
-      AND datetime(created_at) >= datetime('now', '-' || ? || ' hours')
+      AND datetime(created_at) >= now() - (? || ' hours')::interval
     ORDER BY created_at DESC LIMIT 20`).all(String(hours));
 }
 
-export function dismissNotification({ db, id }) {
-  db.prepare(`UPDATE notifications SET dismissed_at=datetime('now') WHERE id=?`).run(id);
+export async function dismissNotification({ db, id }) {
+  await db.prepare(`UPDATE notifications SET dismissed_at=datetime('now') WHERE id=?`).run(id);
   return { dismissed: true };
 }
 
@@ -297,9 +297,9 @@ function esignKindFromEmail({ fromHeader, subjectHeader }) {
 
 // Try to figure out which brand/deal this envelope belongs to by scanning the
 // subject + body for known brand names. Falls back to null if no clear match.
-function guessDealForEsign({ db, subjectHeader, bodyText }) {
+async function guessDealForEsign({ db, subjectHeader, bodyText }) {
   const blob = `${subjectHeader || ''} ${(bodyText || '').slice(0, 500)}`.toLowerCase();
-  const deals = db.prepare(`SELECT id, brand, brand_key FROM deals
+  const deals = await db.prepare(`SELECT id, brand, brand_key FROM deals
     WHERE state != 'lost' ORDER BY last_activity_at DESC NULLS LAST`).all();
   for (const d of deals) {
     const candidates = [d.brand, d.brand_key].filter(Boolean).map(s => s.toLowerCase());
@@ -315,19 +315,19 @@ function guessDealForEsign({ db, subjectHeader, bodyText }) {
 
 // Detect e-sign emails during Gmail ingest. Returns { kind, notification_id }
 // or null when nothing matched.
-export function detectEsignEmail({ db, fromHeader, subjectHeader, bodyText, threadDealId }) {
+export async function detectEsignEmail({ db, fromHeader, subjectHeader, bodyText, threadDealId }) {
   const kind = esignKindFromEmail({ fromHeader, subjectHeader });
   if (!kind) return null;
 
   // Resolve a deal: prefer the thread's deal_id, fall back to brand scan
   let deal = threadDealId
-    ? db.prepare('SELECT * FROM deals WHERE id=?').get(threadDealId)
+    ? await db.prepare('SELECT * FROM deals WHERE id=?').get(threadDealId)
     : null;
-  if (!deal) deal = guessDealForEsign({ db, subjectHeader, bodyText });
+  if (!deal) deal = await guessDealForEsign({ db, subjectHeader, bodyText });
 
   // Dedupe — don't fire two banners for the same envelope in the same hour
-  const existing = db.prepare(`SELECT id FROM notifications
-    WHERE kind=? AND deal_id IS ?
+  const existing = await db.prepare(`SELECT id FROM notifications
+    WHERE kind=? AND deal_id IS NOT DISTINCT FROM ?
       AND datetime(created_at) > datetime('now','-2 hours')
     LIMIT 1`).get('esign_' + kind, deal?.id || null);
   if (existing) return { kind, notification_id: existing.id, deduped: true };
@@ -341,7 +341,7 @@ export function detectEsignEmail({ db, fromHeader, subjectHeader, bodyText, thre
   };
   if (kind === 'completed' && deal && deal.state !== 'won') {
     snapshot = snapshotDeal(deal);
-    const r = applyStage(db, deal, { raw_stage: 'signed', fee_cents: null });
+    const r = await applyStage(db, deal, { raw_stage: 'signed', fee_cents: null });
     if (r) applied = r;
     title = `✅ ${deal.brand} contract executed`;
     body  = `Fully signed via e-sign — auto-promoted to Signed.`;
@@ -356,13 +356,14 @@ export function detectEsignEmail({ db, fromHeader, subjectHeader, bodyText, thre
     body  = `They're waiting on your signature.`;
   }
 
-  const id = db.prepare(`INSERT INTO notifications
+  const r = await db.prepare(`INSERT INTO notifications
     (kind, deal_id, title, body, prior_raw_stage, prior_funnel_stage, prior_state, prior_fee_cents,
      new_raw_stage, new_funnel_stage, new_state, new_fee_cents)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING id`)
     .run('esign_' + kind, deal?.id || null, title, body,
          snapshot.prior_raw_stage, snapshot.prior_funnel_stage, snapshot.prior_state, snapshot.prior_fee_cents,
-         applied.new_raw_stage, applied.new_funnel_stage, applied.new_state, applied.new_fee_cents).lastInsertRowid;
+         applied.new_raw_stage, applied.new_funnel_stage, applied.new_state, applied.new_fee_cents);
+  const id = r.rows[0].id;
 
   return { kind, notification_id: id, deal_id: deal?.id || null, promoted: kind === 'completed' && !!applied.new_raw_stage };
 }

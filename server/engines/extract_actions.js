@@ -30,7 +30,7 @@ export async function extractActionsForDeal({ db, deal, apiKey, stripQuotedReply
     JSON.stringify(obligations),
   ].join('|'));
 
-  const cached = db.prepare(`SELECT actions_json, cache_key FROM deal_actions_cache WHERE deal_id=?`).get(deal.id);
+  const cached = await db.prepare(`SELECT actions_json, cache_key FROM deal_actions_cache WHERE deal_id=?`).get(deal.id);
   if (cached && cached.cache_key === cacheKey) {
     try {
       const parsed = JSON.parse(cached.actions_json);
@@ -41,11 +41,11 @@ export async function extractActionsForDeal({ db, deal, apiKey, stripQuotedReply
   }
 
   // Pull last 15 messages from the deal's threads, oldest → newest
-  const msgs = db.prepare(`
+  const msgs = (await db.prepare(`
     SELECT m.from_us, m.sent_at, m.body, m.snippet, m.channel, m.sender
     FROM messages m JOIN threads t ON t.id = m.thread_id
     WHERE t.deal_id = ?
-    ORDER BY m.sent_at DESC LIMIT 15`).all(deal.id).reverse();
+    ORDER BY m.sent_at DESC LIMIT 15`).all(deal.id)).reverse();
 
   if (!msgs.length && !obligations.length) {
     // Nothing to read — return null, caller will use heuristic fallback
@@ -158,8 +158,8 @@ Extract Riley's real actions for this deal.`;
     const key_dates = parsed.key_dates && typeof parsed.key_dates === 'object' ? parsed.key_dates : {};
     // Persist as JSON envelope so we can carry key_dates too
     const envelope = { actions, key_dates };
-    db.prepare(`INSERT OR REPLACE INTO deal_actions_cache (deal_id, actions_json, cache_key, generated_at)
-      VALUES (?, ?, ?, datetime('now'))`).run(deal.id, JSON.stringify(envelope), cacheKey);
+    await db.prepare(`INSERT INTO deal_actions_cache (deal_id, actions_json, cache_key, generated_at)
+      VALUES (?, ?, ?, datetime('now')) ON CONFLICT (deal_id) DO UPDATE SET actions_json=excluded.actions_json, cache_key=excluded.cache_key, generated_at=excluded.generated_at`).run(deal.id, JSON.stringify(envelope), cacheKey);
     return { actions, key_dates, regenerated: true };
   } catch (e) {
     return { actions: null, regenerated: false };

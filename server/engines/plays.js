@@ -19,14 +19,14 @@ function daysSince(iso) {
 //   kind, deal_id, brand, creator, urgency (1-100), value_cents, reason,
 //   suggested_action (cook_reply | cook_nudge | sign_contract | send_invoice |
 //                      claim_lead | resolve_clash | walk_away | review_counter)
-export function gatherSignals({ db, creator }) {
+export async function gatherSignals({ db, creator }) {
   const signals = [];
   const creatorFilter = creator ? 'AND d.creator_id = ?' : '';
   const params = creator ? [creator] : [];
 
   // ---- 1. Contracts arrived but not yet signed (HIGH urgency) ----
   // Deal is in_works/contract_received but state isn't won yet → action: sign
-  const unsignedContracts = db.prepare(`
+  const unsignedContracts = await db.prepare(`
     SELECT d.id, d.brand, d.creator_id, d.fee_cents, d.raw_stage, d.last_activity_at,
            c.created_at AS contract_at
     FROM deals d
@@ -50,7 +50,7 @@ export function gatherSignals({ db, creator }) {
 
   // ---- 2. Brand-counter offers needing response ----
   // Pitching deals where brand sent a $ that differs from our quote
-  const pitching = db.prepare(`
+  const pitching = await db.prepare(`
     SELECT d.id, d.brand, d.creator_id, d.fee_cents, d.ball_in_court, d.raw_stage,
            (SELECT body FROM messages m JOIN threads t ON t.id=m.thread_id
             WHERE t.deal_id=d.id AND m.from_us=0 ORDER BY m.sent_at DESC LIMIT 1) AS brand_msg,
@@ -100,7 +100,7 @@ export function gatherSignals({ db, creator }) {
 
   // ---- 3. Stale threads (3-14d silent on brand side) → nudge ----
   // Cap nudge candidates to highest-value 8 to keep plays list manageable
-  const staleThreads = db.prepare(`
+  const staleThreads = await db.prepare(`
     SELECT d.id, d.brand, d.creator_id, d.fee_cents, d.raw_stage, d.funnel_stage,
            t.id AS thread_id, t.last_message_at, t.last_message_by,
            (SELECT MAX(sent_at) FROM messages m
@@ -131,7 +131,7 @@ export function gatherSignals({ db, creator }) {
 
   // ---- 4. Payments overdue ----
   // Won/in-works deals where posting + payment_terms_days < today, no paid_cents
-  const payments = db.prepare(`
+  const payments = await db.prepare(`
     SELECT d.id, d.brand, d.creator_id, d.fee_cents, d.posting_date,
            COALESCE(d.payment_terms_days, 30) AS net_days,
            d.paid_cents
@@ -172,7 +172,7 @@ export function gatherSignals({ db, creator }) {
   // contracts/envelopes have no creator yet, so they belong in the New Leads
   // tray (which always shows them) — not in this creator-specific brain.
   if (!creator) {
-    const leads = db.prepare(`
+    const leads = await db.prepare(`
       SELECT id, fee_cents, created_at, extracted
       FROM contracts WHERE deal_id IS NULL AND dismissed_at IS NULL
         AND fee_cents >= 30000
@@ -191,7 +191,7 @@ export function gatherSignals({ db, creator }) {
       });
     }
 
-    const esignPending = db.prepare(`
+    const esignPending = await db.prepare(`
       SELECT id, title, body, created_at FROM notifications
       WHERE kind = 'esign_pending' AND deal_id IS NULL
         AND dismissed_at IS NULL AND undone_at IS NULL
@@ -216,7 +216,7 @@ export function gatherSignals({ db, creator }) {
   if (dealIds.length) {
     const classMap = {};
     try {
-      const rows = db.prepare(`
+      const rows = await db.prepare(`
         SELECT t.deal_id, m.classification
         FROM messages m JOIN threads t ON t.id = m.thread_id
         WHERE t.deal_id IN (${dealIds.map(()=>'?').join(',')})

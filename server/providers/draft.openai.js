@@ -181,12 +181,12 @@ OUTPUT FORMAT:
 // call per process — voice doesn't change every minute.
 let _voiceSamplesCache = null;
 let _voiceSamplesCachedAt = 0;
-function loadVoiceSamples(db) {
+async function loadVoiceSamples(db) {
   if (!db) return '';
   const now = Date.now();
   if (_voiceSamplesCache && (now - _voiceSamplesCachedAt) < 3600_000) return _voiceSamplesCache;
   try {
-    const rows = db.prepare(`
+    const rows = await db.prepare(`
       SELECT body FROM messages
       WHERE from_us = 1 AND channel = 'email'
         AND body IS NOT NULL AND length(body) BETWEEN 150 AND 1500
@@ -214,10 +214,10 @@ function loadVoiceSamples(db) {
 // into every Cook prompt so the AI never invents windows ("we're holding Jun
 // 23-30 for another deal" when no such deal exists). Excludes the current
 // deal itself + completed/cold deals. Window: today through 90d out.
-function loadHolds(db, creator_id, excludeDealId) {
+async function loadHolds(db, creator_id, excludeDealId) {
   if (!db || !creator_id) return '';
   try {
-    const rows = db.prepare(`
+    const rows = await db.prepare(`
       SELECT id, brand, funnel_stage, state, posting_date, posting_window_start, posting_window_end,
              fee_cents, json_extract(extra, '$.deliverable') as deliverable
       FROM deals
@@ -226,8 +226,8 @@ function loadHolds(db, creator_id, excludeDealId) {
         AND funnel_stage NOT IN ('completed','cold','dormant')
         AND (state='won' OR funnel_stage IN ('in_works','signed','agreed'))
         AND COALESCE(posting_date, posting_window_start) IS NOT NULL
-        AND COALESCE(posting_date, posting_window_start) >= date('now', '-3 days')
-        AND COALESCE(posting_date, posting_window_start) <= date('now', '+120 days')
+        AND COALESCE(posting_date, posting_window_start) >= to_char(now() - interval '3 days', 'YYYY-MM-DD')
+        AND COALESCE(posting_date, posting_window_start) <= to_char(now() + interval '120 days', 'YYYY-MM-DD')
       ORDER BY COALESCE(posting_date, posting_window_start) ASC
     `).all(creator_id, excludeDealId || '');
     if (!rows.length) {
@@ -305,13 +305,13 @@ export class OpenAIDraftProvider {
     // Include the custom instruction in dedupe so different voice-noted
     // instructions on the same thread cook fresh drafts (not the same draft).
     const dedupe_key = `draft:${deal.id}:${mode}:${(latestMessage?.id || deal.latest_msg_id || '')}:${customInstruction ? hash(customInstruction) : ''}:${Date.now()}`;
-    const gate = this.spend.attempt({ dedupe_key });
+    const gate = await this.spend.attempt({ dedupe_key });
     if (!gate.ok) throw new Error('SpendGuard blocked draft: ' + gate.reason);
 
-    const holds = loadHolds(this.db, deal.creator_id, deal.id);
+    const holds = await loadHolds(this.db, deal.creator_id, deal.id);
     const userPrompt = buildPrompt({ deal, latestMessage, mode, sug, customInstruction, threadHistory, waHistory, holds });
     // Pull Riley's actual outbound voice samples and prepend to the system playbook
-    const voiceSamples = loadVoiceSamples(this.db);
+    const voiceSamples = await loadVoiceSamples(this.db);
     const systemContent = PLAYBOOK + voiceSamples;
     const t0 = Date.now();
     const res = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -338,7 +338,7 @@ export class OpenAIDraftProvider {
     const est_cost_cents =
         Math.round((usage.prompt_tokens || 0) * 0.00025) +
         Math.round((usage.completion_tokens || 0) * 0.001);
-    this.spend.record({
+    await this.spend.record({
       provider: 'openai', model: 'gpt-4o', operation: 'draft',
       prompt_tokens: usage.prompt_tokens || 0,
       completion_tokens: usage.completion_tokens || 0,
@@ -368,7 +368,7 @@ export class OpenAIParseProvider {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OPENAI_API_KEY missing in .env');
     const dedupe_key = `intent:${hash(text)}`;
-    const gate = this.spend.attempt({ dedupe_key });
+    const gate = await this.spend.attempt({ dedupe_key });
     if (!gate.ok) return { intent: 'unknown', confidence: 0, error: gate.reason };
 
     const sys = `Classify a short Riley command into a JSON intent. Possible intents:
@@ -401,7 +401,7 @@ Return ONLY {"intent": "...", "confidence": 0-1, ...fields}. No prose.`;
     const est_cost_cents =
         Math.round((usage.prompt_tokens || 0) * 0.000015) +
         Math.round((usage.completion_tokens || 0) * 0.00006);
-    this.spend.record({
+    await this.spend.record({
       provider: 'openai', model: 'gpt-4o-mini', operation: 'classify',
       prompt_tokens: usage.prompt_tokens || 0,
       completion_tokens: usage.completion_tokens || 0,
@@ -413,7 +413,7 @@ Return ONLY {"intent": "...", "confidence": 0-1, ...fields}. No prose.`;
     catch { return { intent:'note', confidence:0.3, text }; }
     // Resolve brand -> deal_id if mentioned
     if (intent.brand) {
-      const row = this.db.prepare('SELECT id, brand, creator_id FROM deals WHERE LOWER(brand) LIKE ?').get('%' + intent.brand.toLowerCase() + '%');
+      const row = await this.db.prepare('SELECT id, brand, creator_id FROM deals WHERE LOWER(brand) LIKE ?').get('%' + intent.brand.toLowerCase() + '%');
       if (row) { intent.deal_id = row.id; intent.creator_id ||= row.creator_id; }
     }
     return { ...intent, _cost_cents: est_cost_cents };

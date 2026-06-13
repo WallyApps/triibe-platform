@@ -12,7 +12,7 @@ export class LocalStubParseProvider {
 
     // money / payment
     if (/\b(paid|payment|collected|wired|deposit|invoice (?:was )?paid)\b/.test(low)) {
-      return { intent: 'log_payment', ...extractMoney(t), ...extractBrand(t, this.db), confidence: 0.85 };
+      return { intent: 'log_payment', ...extractMoney(t), ...await extractBrand(t, this.db), confidence: 0.85 };
     }
     // message
     if (/^(text|message|dm|tell|let .* know|whatsapp)\b/i.test(t)) {
@@ -20,7 +20,7 @@ export class LocalStubParseProvider {
     }
     // flag / note
     if (/\b(flag|redline|red ?line|perpetual|exclusiv|risk|watch out)\b/i.test(t)) {
-      return { intent: 'flag_deal', ...extractBrand(t, this.db), note: t, confidence: 0.75 };
+      return { intent: 'flag_deal', ...await extractBrand(t, this.db), note: t, confidence: 0.75 };
     }
     // reminder
     if (/\b(remind|chase|follow up|nudge|tomorrow|next week|on (mon|tue|wed|thu|fri|sat|sun))\b/i.test(t)) {
@@ -28,7 +28,7 @@ export class LocalStubParseProvider {
     }
     // stage move
     if (/\b(move|promote|advance|mark as|set to)\b.*\b(cold|conversation|pitching|in works|active|completed|signed|dead)\b/i.test(low)) {
-      return { intent: 'change_stage', ...extractBrand(t, this.db), to: extractStage(low), confidence: 0.7 };
+      return { intent: 'change_stage', ...await extractBrand(t, this.db), to: extractStage(low), confidence: 0.7 };
     }
     // ask question
     if (/^(what|who|when|how much|how many|why|where|show me|list)\b/i.test(t)) {
@@ -45,11 +45,11 @@ function extractMoney(t) {
   if (m[2]) n *= 1000;
   return { amount_cents: Math.round(n * 100) };
 }
-function extractBrand(t, db) {
+async function extractBrand(t, db) {
   // greedy heuristic: capitalized word(s); then verify against deals table
   const words = t.match(/\b[A-Z][A-Za-z0-9.&+\-]+(?:\s+[A-Z][A-Za-z0-9.&+\-]+)?/g) || [];
   for (const w of words) {
-    const row = db.prepare('SELECT id, brand, creator_id FROM deals WHERE LOWER(brand) LIKE ?').get('%' + w.toLowerCase() + '%');
+    const row = await db.prepare('SELECT id, brand, creator_id FROM deals WHERE LOWER(brand) LIKE ?').get('%' + w.toLowerCase() + '%');
     if (row) return { deal_id: row.id, brand: row.brand, creator_id: row.creator_id };
   }
   return {};

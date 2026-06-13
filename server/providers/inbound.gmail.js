@@ -167,7 +167,7 @@ export class GmailInboundProvider {
 
     // Build deal_id index from thread_id stored on deals
     const dealByThread = Object.fromEntries(
-      this.db.prepare(`SELECT id, thread_id FROM deals WHERE thread_id IS NOT NULL`).all()
+      (await this.db.prepare(`SELECT id, thread_id FROM deals WHERE thread_id IS NOT NULL`).all())
         .map(r => [r.thread_id, r.id])
     );
 
@@ -182,9 +182,9 @@ export class GmailInboundProvider {
       VALUES (?, ?, 'email', ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET body=excluded.body, snippet=excluded.snippet`);
     const insertAtt = this.db.prepare(`
-      INSERT OR IGNORE INTO message_attachments
+      INSERT INTO message_attachments
         (message_id, thread_id, channel, media_path, media_filename, media_mime, media_size, media_type, source_attachment_id)
-      VALUES (?, ?, 'email', ?, ?, ?, ?, ?, ?)`);
+      VALUES (?, ?, 'email', ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`);
 
     let nThreads = 0, nMessages = 0, ballFlips = 0, nAtts = 0;
     for (const [tid, msgs] of Object.entries(byThread)) {
@@ -194,8 +194,8 @@ export class GmailInboundProvider {
       const lastUs = senderIsUs(sender);
       const lastDate = new Date(Number(last.internalDate)).toISOString();
       const subject = headerOf(last, 'Subject') || '';
-      const ballBefore = this.db.prepare('SELECT ball_in_court FROM threads WHERE id=?').get(tid);
-      upsertThread.run(tid, dealByThread[tid] || null, subject, lastDate,
+      const ballBefore = await this.db.prepare('SELECT ball_in_court FROM threads WHERE id=?').get(tid);
+      await upsertThread.run(tid, dealByThread[tid] || null, subject, lastDate,
         lastUs ? 'us' : 'them', lastUs ? 'them' : 'us');
       if (ballBefore && ballBefore.ball_in_court !== (lastUs ? 'them' : 'us')) ballFlips++;
       nThreads++;
@@ -205,7 +205,7 @@ export class GmailInboundProvider {
         const date = new Date(Number(m.internalDate)).toISOString();
         const body = extractBody(m);
         const snippet = (m.snippet || '').slice(0, 140);
-        insertMsg.run(m.id, tid, from || null, senderIsUs(from) ? 1 : 0, date, snippet, body, m.id);
+        await insertMsg.run(m.id, tid, from || null, senderIsUs(from) ? 1 : 0, date, snippet, body, m.id);
         nMessages++;
         // Download any attachments on this message (PDFs, decks, images, etc.)
         const atts = listAttachments(m);
@@ -221,7 +221,7 @@ export class GmailInboundProvider {
           if (isImg && /^(noname|image\d+|untitled|inline|signature|logo)/.test(fname)) continue;
           const saved = await downloadAttachment({ gmail: this.gmail, messageId: m.id, attachment: att });
           if (saved) {
-            insertAtt.run(m.id, tid, saved.media_path, saved.media_filename,
+            await insertAtt.run(m.id, tid, saved.media_path, saved.media_filename,
               saved.media_mime, saved.media_size, saved.media_type, att.attachmentId);
             nAtts++;
           }
@@ -230,7 +230,7 @@ export class GmailInboundProvider {
 
       // Also push ball_in_court onto the deal itself for the UI
       if (dealByThread[tid]) {
-        this.db.prepare(`UPDATE deals SET ball_in_court=?, last_activity_at=?,
+        await this.db.prepare(`UPDATE deals SET ball_in_court=?, last_activity_at=?,
           last_activity_by=? WHERE id=?`).run(
           lastUs ? 'them' : 'us', lastDate, lastUs ? 'us' : 'them', dealByThread[tid]
         );
@@ -239,9 +239,9 @@ export class GmailInboundProvider {
         if (!lastUs) {
           try {
             const { promoteFromEmailSignal } = await import('../engines/auto_promote.js');
-            const freshDeal = this.db.prepare('SELECT * FROM deals WHERE id=?').get(dealByThread[tid]);
+            const freshDeal = await this.db.prepare('SELECT * FROM deals WHERE id=?').get(dealByThread[tid]);
             const msgText = extractBody(last) || last.snippet || '';
-            const r = promoteFromEmailSignal({ db: this.db, deal: freshDeal, msgText });
+            const r = await promoteFromEmailSignal({ db: this.db, deal: freshDeal, msgText });
             if (r.promoted) console.log(`[auto-promote email] ${freshDeal.brand} → ${r.applied.new_raw_stage}`);
           } catch (e) { console.warn('[auto-promote email] failed:', e.message); }
         }
@@ -253,7 +253,7 @@ export class GmailInboundProvider {
         const fromHeader = headerOf(last, 'From');
         const subjectHeader = headerOf(last, 'Subject');
         const bodyText = extractBody(last) || last.snippet || '';
-        const r = detectEsignEmail({ db: this.db, fromHeader, subjectHeader, bodyText, threadDealId: dealByThread[tid] });
+        const r = await detectEsignEmail({ db: this.db, fromHeader, subjectHeader, bodyText, threadDealId: dealByThread[tid] });
         if (r && !r.deduped) console.log(`[esign] ${r.kind}: ${subjectHeader?.slice(0,80)} → deal=${r.deal_id || 'unmatched'}${r.promoted ? ' (auto-signed)' : ''}`);
       } catch (e) { console.warn('[esign detect] failed:', e.message); }
       // Classify the LAST inbound message — gives the brain authority context.
@@ -261,7 +261,7 @@ export class GmailInboundProvider {
       if (!lastUs && dealByThread[tid] && process.env.OPENAI_API_KEY) {
         try {
           const { classifyMessage } = await import('../engines/classify_message.js');
-          const dealRow = this.db.prepare('SELECT * FROM deals WHERE id=?').get(dealByThread[tid]);
+          const dealRow = await this.db.prepare('SELECT * FROM deals WHERE id=?').get(dealByThread[tid]);
           let obligations = [];
           try { obligations = JSON.parse(dealRow?.obligations || '[]'); } catch {}
           const cls = await classifyMessage({
@@ -270,7 +270,7 @@ export class GmailInboundProvider {
             deal: dealRow, obligations,
           });
           if (cls) {
-            this.db.prepare(`UPDATE messages SET classification=? WHERE id=?`)
+            await this.db.prepare(`UPDATE messages SET classification=? WHERE id=?`)
               .run(JSON.stringify(cls), last.id);
           }
         } catch (e) { /* silent */ }
@@ -298,14 +298,14 @@ export async function pullSingleThread(db, threadId) {
   if (!msgs.length) return { ok:true, fetched:0 };
 
   const dealByThread = Object.fromEntries(
-    db.prepare(`SELECT id, thread_id FROM deals WHERE thread_id IS NOT NULL`).all()
+    (await db.prepare(`SELECT id, thread_id FROM deals WHERE thread_id IS NOT NULL`).all())
       .map(r => [r.thread_id, r.id])
   );
   // Also map deals by their contact email — rescues threads where deal.thread_id is
   // stale or wrong (e.g. pointing at a Google Doc notification thread).
   const dealByEmail = Object.fromEntries(
-    db.prepare(`SELECT id, LOWER(contact_email) e FROM deals
-                WHERE contact_email IS NOT NULL AND contact_email != ''`).all()
+    (await db.prepare(`SELECT id, LOWER(contact_email) e FROM deals
+                WHERE contact_email IS NOT NULL AND contact_email != ''`).all())
       .map(r => [r.e, r.id])
   );
   // Resolve deal_id: prefer explicit thread_id match, fall back to email match.
@@ -322,9 +322,9 @@ export async function pullSingleThread(db, threadId) {
     VALUES (?, ?, 'email', ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET body=excluded.body, snippet=excluded.snippet`);
   const insertAtt = db.prepare(`
-    INSERT OR IGNORE INTO message_attachments
+    INSERT INTO message_attachments
       (message_id, thread_id, channel, media_path, media_filename, media_mime, media_size, media_type, source_attachment_id)
-    VALUES (?, ?, 'email', ?, ?, ?, ?, ?, ?)`);
+    VALUES (?, ?, 'email', ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`);
 
   // Decode FULL messages — these come from threads.get already
   let nMsgs = 0, nAtts = 0;
@@ -333,7 +333,7 @@ export async function pullSingleThread(db, threadId) {
   const lastUs = senderIsUs(lastSender);
   const lastDate = new Date(Number(last.internalDate)).toISOString();
   const subject = headerOf(last, 'Subject') || '';
-  upsertThread.run(threadId, resolvedDealId, subject, lastDate,
+  await upsertThread.run(threadId, resolvedDealId, subject, lastDate,
     lastUs ? 'us' : 'them', lastUs ? 'them' : 'us');
 
   for (const m of msgs) {
@@ -341,14 +341,14 @@ export async function pullSingleThread(db, threadId) {
     const date = new Date(Number(m.internalDate)).toISOString();
     const body = extractBody(m);
     const snippet = (m.snippet || '').slice(0, 140);
-    insertMsg.run(m.id, threadId, from || null, senderIsUs(from) ? 1 : 0, date, snippet, body, m.id);
+    await insertMsg.run(m.id, threadId, from || null, senderIsUs(from) ? 1 : 0, date, snippet, body, m.id);
     nMsgs++;
     const atts = listAttachments(m);
     for (const att of atts) {
       if ((att.size || 0) < 5_000 && att.mimeType?.startsWith('image/')) continue;
       const saved = await downloadAttachment({ gmail, messageId: m.id, attachment: att });
       if (saved) {
-        insertAtt.run(m.id, threadId, saved.media_path, saved.media_filename,
+        await insertAtt.run(m.id, threadId, saved.media_path, saved.media_filename,
           saved.media_mime, saved.media_size, saved.media_type, att.attachmentId);
         nAtts++;
       }
@@ -356,15 +356,15 @@ export async function pullSingleThread(db, threadId) {
   }
   // Also update deal's ball/activity (use the resolved deal id, not just thread match)
   if (resolvedDealId) {
-    db.prepare(`UPDATE deals SET ball_in_court=?, last_activity_at=?, last_activity_by=? WHERE id=?`)
+    await db.prepare(`UPDATE deals SET ball_in_court=?, last_activity_at=?, last_activity_by=? WHERE id=?`)
       .run(lastUs ? 'them' : 'us', lastDate, lastUs ? 'us' : 'them', resolvedDealId);
     // Tier-2 auto-promote on a brand-side lock-in reply
     if (!lastUs) {
       try {
         const { promoteFromEmailSignal } = await import('../engines/auto_promote.js');
-        const freshDeal = db.prepare('SELECT * FROM deals WHERE id=?').get(resolvedDealId);
+        const freshDeal = await db.prepare('SELECT * FROM deals WHERE id=?').get(resolvedDealId);
         const msgText = extractBody(last) || last.snippet || '';
-        const r = promoteFromEmailSignal({ db, deal: freshDeal, msgText });
+        const r = await promoteFromEmailSignal({ db, deal: freshDeal, msgText });
         if (r.promoted) console.log(`[auto-promote email] ${freshDeal.brand} → ${r.applied.new_raw_stage}`);
       } catch (e) { console.warn('[auto-promote email] failed:', e.message); }
     }
@@ -375,7 +375,7 @@ export async function pullSingleThread(db, threadId) {
     const fromHeader = headerOf(last, 'From');
     const subjectHeader = headerOf(last, 'Subject');
     const bodyText = extractBody(last) || last.snippet || '';
-    const r = detectEsignEmail({ db, fromHeader, subjectHeader, bodyText, threadDealId: resolvedDealId });
+    const r = await detectEsignEmail({ db, fromHeader, subjectHeader, bodyText, threadDealId: resolvedDealId });
     if (r && !r.deduped) console.log(`[esign] ${r.kind}: ${subjectHeader?.slice(0,80)} → deal=${r.deal_id || 'unmatched'}${r.promoted ? ' (auto-signed)' : ''}`);
   } catch (e) { console.warn('[esign detect] failed:', e.message); }
   return { ok:true, fetched:nMsgs, last_at:lastDate, last_by: lastUs ? 'us' : 'them', resolved_deal_id: resolvedDealId };
@@ -482,9 +482,11 @@ export function listAttachments(msg) {
 // Download attachment bytes via Gmail API + save to disk under data/email-media/.
 // Returns { media_path (relative), media_filename, media_mime, media_size, media_type }
 // or null on failure. Uses sha1 prefix to keep filenames unique + safe.
-const EMAIL_MEDIA_DIR = '/Users/rileywallack/triibe-platform/data/email-media';
+// Project-relative (was a hardcoded /Users/rileywallack path). mkdir is lazy +
+// failure-safe so importing this module never crashes on a read-only FS
+// (e.g. serverless) — attachment download just no-ops if the dir can't be made.
+const EMAIL_MEDIA_DIR = join(ROOT, 'data', 'email-media');
 import { mkdirSync as _mkAttDir } from 'node:fs';
-_mkAttDir(EMAIL_MEDIA_DIR, { recursive: true });
 
 export async function downloadAttachment({ gmail, messageId, attachment }) {
   try {
@@ -498,6 +500,7 @@ export async function downloadAttachment({ gmail, messageId, attachment }) {
     const hash = createHash('sha1').update(messageId + ':' + attachment.attachmentId).digest('hex').slice(0,16);
     const fname = `${hash}-${safeName}`;
     const full = `${EMAIL_MEDIA_DIR}/${fname}`;
+    try { _mkAttDir(EMAIL_MEDIA_DIR, { recursive: true }); } catch {}
     if (!existsSync(full)) writeFileSync(full, buf);
     const mime = attachment.mimeType || 'application/octet-stream';
     const media_type = mime.startsWith('image/') ? 'image'

@@ -10,23 +10,23 @@
 export class SpendGuard {
   constructor(db) { this.db = db; }
 
-  cfg(key, fallback = null) {
-    const r = this.db.prepare('SELECT value FROM config WHERE key=?').get(key);
+  async cfg(key, fallback = null) {
+    const r = await this.db.prepare('SELECT value FROM config WHERE key=?').get(key);
     return r ? r.value : fallback;
   }
 
-  status() {
-    const enabled = this.cfg('ai_enabled', 'false') === 'true';
-    const monthlyCap = parseInt(this.cfg('ai_monthly_cap_cents', '2000'), 10);
-    const tokenBudget = parseInt(this.cfg('ai_daily_token_budget', '500000'), 10);
-    const callCap = parseInt(this.cfg('ai_max_calls_per_hour', '60'), 10);
+  async status() {
+    const enabled = (await this.cfg('ai_enabled', 'false')) === 'true';
+    const monthlyCap = parseInt(await this.cfg('ai_monthly_cap_cents', '2000'), 10);
+    const tokenBudget = parseInt(await this.cfg('ai_daily_token_budget', '500000'), 10);
+    const callCap = parseInt(await this.cfg('ai_max_calls_per_hour', '60'), 10);
 
-    const monthSpend = this.db.prepare(`SELECT COALESCE(SUM(est_cost_cents),0) v FROM ai_usage
-      WHERE ts >= date('now','start of month')`).get().v;
-    const dayTokens = this.db.prepare(`SELECT COALESCE(SUM(prompt_tokens+completion_tokens),0) v
-      FROM ai_usage WHERE ts >= date('now')`).get().v;
-    const hourCalls = this.db.prepare(`SELECT COUNT(*) c FROM ai_usage
-      WHERE ts >= datetime('now','-1 hour')`).get().c;
+    const monthSpend = (await this.db.prepare(`SELECT COALESCE(SUM(est_cost_cents),0) v FROM ai_usage
+      WHERE ts >= date('now','start of month')`).get()).v;
+    const dayTokens = (await this.db.prepare(`SELECT COALESCE(SUM(prompt_tokens+completion_tokens),0) v
+      FROM ai_usage WHERE ts >= date('now')`).get()).v;
+    const hourCalls = (await this.db.prepare(`SELECT COUNT(*) c FROM ai_usage
+      WHERE ts >= datetime('now','-1 hour')`).get()).c;
 
     return {
       enabled,
@@ -38,8 +38,8 @@ export class SpendGuard {
   }
 
   // returns { ok: bool, reason }
-  attempt({ dedupe_key } = {}) {
-    const s = this.status();
+  async attempt({ dedupe_key } = {}) {
+    const s = await this.status();
     if (!s.enabled) return { ok: false, reason: 'AI is OFF (kill switch). Flip ai_enabled in config to turn on.' };
     if (s.usage.month_cents >= s.caps.monthly_cents)
       return { ok: false, reason: `Monthly cap hit ($${s.caps.monthly_cents/100}). Waits until next month or raise the cap.` };
@@ -49,24 +49,24 @@ export class SpendGuard {
       return { ok: false, reason: 'Hourly call cap hit. Throttled.' };
 
     if (dedupe_key) {
-      const dup = this.db.prepare('SELECT id FROM ai_usage WHERE dedupe_key=?').get(dedupe_key);
+      const dup = await this.db.prepare('SELECT id FROM ai_usage WHERE dedupe_key=?').get(dedupe_key);
       if (dup) return { ok: false, reason: 'Dedupe: this exact input was already processed.' };
     }
     return { ok: true, status: s };
   }
 
-  record({ provider, model, operation, prompt_tokens = 0, completion_tokens = 0,
+  async record({ provider, model, operation, prompt_tokens = 0, completion_tokens = 0,
            est_cost_cents = 0, deal_id = null, dedupe_key = null }) {
-    this.db.prepare(`INSERT INTO ai_usage (provider, model, operation,
+    await this.db.prepare(`INSERT INTO ai_usage (provider, model, operation,
         prompt_tokens, completion_tokens, est_cost_cents, deal_id, dedupe_key)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(provider, model, operation, prompt_tokens, completion_tokens, est_cost_cents, deal_id, dedupe_key);
 
     // budget-alert flags (so the UI can show a banner at 50/80%)
-    const s = this.status();
-    if (s.pct_of_cap >= 80 && this.cfg('ai_budget_alert_80') !== 'true')
-      this.db.prepare(`UPDATE config SET value='true', updated_at=datetime('now') WHERE key='ai_budget_alert_80'`).run();
-    if (s.pct_of_cap >= 50 && this.cfg('ai_budget_alert_50') !== 'true')
-      this.db.prepare(`UPDATE config SET value='true', updated_at=datetime('now') WHERE key='ai_budget_alert_50'`).run();
+    const s = await this.status();
+    if (s.pct_of_cap >= 80 && (await this.cfg('ai_budget_alert_80')) !== 'true')
+      await this.db.prepare(`UPDATE config SET value='true', updated_at=datetime('now') WHERE key='ai_budget_alert_80'`).run();
+    if (s.pct_of_cap >= 50 && (await this.cfg('ai_budget_alert_50')) !== 'true')
+      await this.db.prepare(`UPDATE config SET value='true', updated_at=datetime('now') WHERE key='ai_budget_alert_50'`).run();
   }
 }

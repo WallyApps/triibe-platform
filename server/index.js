@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, extname, normalize } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { loadEnv } from './env.js';
-import { providers } from './providers/index.js';
+import { providers, ensureInit } from './providers/index.js';
 import { computeClashes, canDo } from './engines/clash.js';
 import { suggestPrice } from './engines/pricing.js';
 import { checklistForDeal, antiMistakeReport, pickDraftMode, ITEMS as CHECKLIST_ITEMS } from './engines/checklist.js';
@@ -17,7 +17,6 @@ import { promoteFromContract, promoteFromEmailSignal, undoPromotion,
          listActiveNotifications, dismissNotification, extractDollarCents } from './engines/auto_promote.js';
 import { readFileSync as _readRateCard } from 'node:fs';
 let RATE_CARD = {};
-try { RATE_CARD = JSON.parse(_readRateCard('/Users/rileywallack/triibe-platform/config/rate_card.json', 'utf8')); } catch {}
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { GmailInboundProvider, hasToken as hasGmailToken, sendThreadedReply, pullSingleThread, stripQuotedReply } from './providers/inbound.gmail.js';
 import { runPull as runWhatsAppPull } from '../tools/wa-sync.js';
@@ -30,6 +29,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
 const PUBLIC = join(ROOT, 'public');
 const PORT = parseInt(process.env.PORT || '4744', 10);
+
+// Rate card (project-relative; was a hardcoded /Users/rileywallack path).
+try { RATE_CARD = JSON.parse(_readRateCard(join(ROOT, 'config', 'rate_card.json'), 'utf8')); } catch {}
 
 // Lazy provider resolution — re-reads config every request so flipping
 // `ai_enabled` is instant (no server restart needed).
@@ -56,38 +58,38 @@ const route = (method, pat, handler) => routes.push({ method, re: new RegExp('^'
 // ---- API routes -------------------------------------------------------------
 
 route('GET', '/api/health', async (req, res) => {
-  const dcount = P.db().prepare('SELECT COUNT(*) c FROM deals').get().c;
-  const spend = P.spend.status();
+  const dcount = (await P.db().prepare('SELECT COUNT(*) c FROM deals').get()).c;
+  const spend = (await P.spend.status());
   json(res, { ok: true, deals: dcount, spend, providers: {
     data: 'sqlite', draft: P.cfg('draft_provider', 'local-stub'),
     ai_enabled: spend.enabled
   }});
 });
 
-route('GET', '/api/creators', async (req, res) => json(res, P.data.listCreators()));
+route('GET', '/api/creators', async (req, res) => json(res, (await P.data.listCreators())));
 
 route('GET', '/api/deals', async (req, res, { url }) => {
   const q = url.searchParams;
-  json(res, P.data.listDeals({
+  json(res, (await P.data.listDeals({
     creator: q.get('creator') || undefined,
     funnel_stage: q.get('stage') || undefined,
     state: q.get('state') || undefined,
     focus: q.get('focus') === '1',
     limit: parseInt(q.get('limit') || '500', 10),
-  }));
+  })));
 });
 
 route('GET', '/api/deals/([^/]+)', async (req, res, { match }) => {
-  const d = P.data.getDeal(match[1]);
+  const d = (await P.data.getDeal(match[1]));
   if (!d) return json(res, { error: 'not found' }, 404);
   json(res, d);
 });
 
 route('GET', '/api/funnel', async (req, res, { url }) => {
-  json(res, P.data.funnelHealth({
+  json(res, (await P.data.funnelHealth({
     creator: url.searchParams.get('creator') || undefined,
     focus: url.searchParams.get('focus') === '1',
-  }));
+  })));
 });
 
 // --- PARKED DEALS ----------------------------------------------------------
@@ -98,9 +100,9 @@ route('GET', '/api/funnel', async (req, res, { url }) => {
 
 // Auto-revive any dormant deal whose revisit date is today-or-past. Cheap query,
 // idempotent — safe to call on every Pitches/Today refresh.
-function revivePastDueParked(db) {
+async function revivePastDueParked(db) {
   const todayISO = new Date().toISOString().slice(0, 10);
-  return db.prepare(`
+  return (await db.prepare(`
     UPDATE deals
        SET state = 'open',
            revived_at = datetime('now'),
@@ -108,15 +110,15 @@ function revivePastDueParked(db) {
      WHERE state = 'dormant'
        AND revisit_at IS NOT NULL
        AND revisit_at <= ?
-  `).run(todayISO).changes;
+  `).run(todayISO)).changes;
 }
 
 route('GET', '/api/parked', async (req, res, { url }) => {
   const creator = url.searchParams.get('creator') || undefined;
   // Run revival first so anything past-due drops OUT of this list and shows up
   // in Pitches with the revived banner on the next refresh.
-  try { revivePastDueParked(P.db()); } catch {}
-  const rows = P.db().prepare(`
+  try { await revivePastDueParked(P.db()); } catch {}
+  const rows = await P.db().prepare(`
     SELECT id, brand, creator_id, fee_cents, raw_stage, category,
            parked_at, revisit_at, park_reason,
            last_activity_at, ai_summary, next_action_detail
@@ -137,7 +139,7 @@ route('GET', '/api/parked', async (req, res, { url }) => {
   // Compute days-until-revisit for the UI so it can render "in 12d" / "overdue 3d".
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const enriched = rows.map(r => {
+  const enriched = await Promise.all(rows.map(async (r) => {
     let days_until = null;
     if (r.revisit_at) {
       const t = new Date(r.revisit_at + 'T00:00:00Z').getTime();
@@ -145,7 +147,7 @@ route('GET', '/api/parked', async (req, res, { url }) => {
     }
     // Pull the most recent message on the deal's thread; strip quoted email
     // reply chains so we don't show stale text from a previous round.
-    const m = lastMsgStmt.get(r.id);
+    const m = await lastMsgStmt.get(r.id);
     let last_msg = null;
     if (m) {
       let body = m.body || m.snippet || '';
@@ -162,7 +164,7 @@ route('GET', '/api/parked', async (req, res, { url }) => {
       };
     }
     return { ...r, days_until_revisit: days_until, last_msg };
-  });
+  }));
   json(res, { parked: enriched, count: enriched.length });
 });
 
@@ -171,7 +173,7 @@ route('GET', '/api/parked', async (req, res, { url }) => {
 // If neither revisit_at nor days_out is given, default to 60 days from today.
 route('POST', '/api/deals/([^/]+)/park', async (req, res, { match }) => {
   const dealId = match[1];
-  const deal = P.data.getDeal(dealId);
+  const deal = (await P.data.getDeal(dealId));
   if (!deal) return json(res, { error: 'not found' }, 404);
   let body = {};
   try { body = JSON.parse(await readBody(req) || '{}'); } catch {}
@@ -183,7 +185,7 @@ route('POST', '/api/deals/([^/]+)/park', async (req, res, { match }) => {
     revisitAt = d.toISOString().slice(0, 10);
   }
   const reason = (body.reason || '').slice(0, 280) || null;
-  P.db().prepare(`
+  await P.db().prepare(`
     UPDATE deals
        SET state = 'dormant',
            revisit_at = ?,
@@ -200,9 +202,9 @@ route('POST', '/api/deals/([^/]+)/park', async (req, res, { match }) => {
 // "Reach out now"). Clears revisit fields so it behaves like a normal open deal.
 route('POST', '/api/deals/([^/]+)/unpark', async (req, res, { match }) => {
   const dealId = match[1];
-  const deal = P.data.getDeal(dealId);
+  const deal = (await P.data.getDeal(dealId));
   if (!deal) return json(res, { error: 'not found' }, 404);
-  P.db().prepare(`
+  await P.db().prepare(`
     UPDATE deals
        SET state = 'open',
            revisit_at = NULL,
@@ -252,7 +254,7 @@ route('GET', '/api/pipeline-snapshot', async (req, res, { url }) => {
 });
 
 route('GET', '/api/money', async (req, res, { url }) => {
-  json(res, P.data.moneySummary({ creator: url.searchParams.get('creator') || undefined }));
+  json(res, (await P.data.moneySummary({ creator: url.searchParams.get('creator') || undefined })));
 });
 
 // Morning Brief: the "what fires today" hero. Three sections:
@@ -381,7 +383,7 @@ const FORECAST_CACHE = new Map(); // creator -> { forecast, ts }
 const FORECAST_TTL_MS = 5 * 60 * 1000;
 async function computeForecast(creator) {
   const m = await import('./engines/forecaster.js');
-  return m.forecast(P.db(), creator);
+  return await m.forecast(P.db(), creator);
 }
 route('GET', '/api/forecast', async (req, res, { url }) => {
   const creator = url.searchParams.get('creator') || 'cooper';
@@ -411,7 +413,7 @@ route('GET', '/api/money-pulse', async (req, res, { url }) => {
   const monthStartIso = monthStart.toISOString().slice(0,10);
   const monthEndIso = monthEnd.toISOString().slice(0,10);
 
-  const booked = P.db().prepare(`
+  const booked = await P.db().prepare(`
     SELECT id, brand, fee_cents, posting_date, posting_window_start, funnel_stage, state
     FROM deals
     WHERE creator_id = ?
@@ -427,7 +429,7 @@ route('GET', '/api/money-pulse', async (req, res, { url }) => {
   // Projected = booked + (high-likelihood-to-close deals' fees × 50% probability
   // adjustment). High likelihood = brand has counter-engaged + we've got real
   // numbers + ball is moving. Use last_activity_at within 7 days as proxy.
-  const projected = P.db().prepare(`
+  const projected = await P.db().prepare(`
     SELECT id, brand, fee_cents, ball_in_court, last_activity_at, last_activity_by, funnel_stage
     FROM deals
     WHERE creator_id = ?
@@ -464,7 +466,7 @@ route('GET', '/api/money-pulse', async (req, res, { url }) => {
   //   1. Ball on us, days quiet > 4 (we're dropping the ball)
   //   2. Ball on brand, days quiet 5-21 (they're stalling, need a nudge)
   // Exclude already-locked deals (in_works/signed). Sort by fee DESC.
-  const chase = P.db().prepare(`
+  const chase = await P.db().prepare(`
     SELECT d.id, d.brand, d.contact_name, d.fee_cents, d.ball_in_court, d.last_activity_at,
            d.last_activity_by, d.funnel_stage, d.thread_id,
            ROUND(julianday('now') - julianday(d.last_activity_at), 1) as days_quiet,
@@ -519,7 +521,7 @@ route('GET', '/api/money/detail', async (req, res, { url }) => {
   // Invoices owed = booked deals with fee_cents > 0 and no paid payment yet.
   // Use posting_date (or delivery date) as the "anchor" for net-30 aging.
   const BOOKED_RAW = "('contract_received','contract_signed','signed','in_revision','in_production','confirmed')";
-  const owed = P.db().prepare(`
+  const owed = await P.db().prepare(`
     SELECT d.id, d.brand, d.creator_id, d.fee_cents, d.posting_date,
            d.last_activity_at, d.funnel_stage, d.state, d.raw_stage, d.flags
     FROM deals d
@@ -536,7 +538,7 @@ route('GET', '/api/money/detail', async (req, res, { url }) => {
   const paymentRouting = {};
   if (ownedIds.length) {
     const ph = ownedIds.map(() => '?').join(',');
-    const rows = P.db().prepare(`
+    const rows = await P.db().prepare(`
       SELECT t.deal_id,
              (SELECT m.classification FROM messages m WHERE m.thread_id=t.id AND m.from_us=0
               ORDER BY m.sent_at DESC LIMIT 1) AS cls,
@@ -593,7 +595,7 @@ route('GET', '/api/money/detail', async (req, res, { url }) => {
 
   // Recently collected = paid payments, latest first.
   const recentCreatorClause = creator ? 'AND p.deal_id IN (SELECT id FROM deals WHERE creator_id=?)' : '';
-  const collected = P.db().prepare(`
+  const collected = await P.db().prepare(`
     SELECT p.deal_id, p.amount_cents, p.paid_at, p.split_creator_cents, p.split_riley_cents,
            p.split_house_cents, d.brand
     FROM payments p JOIN deals d ON d.id = p.deal_id
@@ -604,15 +606,15 @@ route('GET', '/api/money/detail', async (req, res, { url }) => {
 });
 
 route('GET', '/api/today', async (req, res, { url }) => {
-  json(res, P.data.todayActions({
+  json(res, (await P.data.todayActions({
     creator: url.searchParams.get('creator') || undefined,
     focus: url.searchParams.get('focus') === '1',
     limit: 12,
-  }));
+  })));
 });
 
 route('GET', '/api/clashes', async (req, res) => {
-  const deals = P.data.listDeals({ state: 'open', limit: 2000 });
+  const deals = (await P.data.listDeals({ state: 'open', limit: 2000 }));
   json(res, computeClashes(deals));
 });
 
@@ -623,7 +625,7 @@ route('GET', '/api/threads', async (req, res, { url }) => {
   const filter = creator ? 'AND d.creator_id = ?' : '';
   const args = creator ? [creator] : [];
   // For each thread with a deal_id, pull: thread metadata + the newest message + draft count
-  const rows = P.db().prepare(`
+  const rows = await P.db().prepare(`
     SELECT t.id, t.deal_id, t.channel, t.subject, t.last_message_at,
            t.last_message_by, t.ball_in_court,
            d.brand, d.creator_id, d.fee_cents, d.funnel_stage,
@@ -642,7 +644,7 @@ route('GET', '/api/threads', async (req, res, { url }) => {
 // Force-refresh a single deal's primary email thread (full bodies + attachments).
 // Used when a pill expands and the cached body is empty — self-heals stale syncs.
 route('POST', '/api/deals/([^/]+)/refresh-thread', async (req, res, { match }) => {
-  const deal = P.data.getDeal(match[1]);
+  const deal = (await P.data.getDeal(match[1]));
   if (!deal) return json(res, { ok:false, reason:'not found' }, 404);
   if (!deal.thread_id) return json(res, { ok:false, reason:'no thread linked' });
   try {
@@ -659,7 +661,7 @@ route('POST', '/api/deals/([^/]+)/refresh-thread', async (req, res, { match }) =
 route('GET', '/api/deals/([^/]+)/conversation', async (req, res, { match, url }) => {
   const dealId = match[1];
   const limit = Math.min(Number(url.searchParams.get('limit') || 8), 30);
-  const msgs = P.db().prepare(`
+  const msgs = await P.db().prepare(`
     SELECT m.id, m.thread_id, m.channel, m.sender, m.from_us, m.sent_at,
            m.snippet, m.body, t.subject
     FROM messages m JOIN threads t ON t.id = m.thread_id
@@ -683,7 +685,7 @@ route('GET', '/api/deals/([^/]+)/conversation', async (req, res, { match, url })
     const threadIds = [...new Set(empties.map(m => m.thread_id))];
     await Promise.all(threadIds.slice(0, 3).map(tid => pullSingleThread(P.db(), tid).catch(()=>{})));
     // refetch
-    const refetched = P.db().prepare(`SELECT id, body FROM messages WHERE id IN (${cleaned.map(()=>'?').join(',')})`).all(...cleaned.map(c => c.id));
+    const refetched = await P.db().prepare(`SELECT id, body FROM messages WHERE id IN (${cleaned.map(()=>'?').join(',')})`).all(...cleaned.map(c => c.id));
     const map = Object.fromEntries(refetched.map(r => [r.id, r.body]));
     for (const c of cleaned) {
       if (map[c.id]) {
@@ -705,19 +707,21 @@ route('GET', '/api/messages/latest', async (req, res, { url }) => {
   if (!ids.length) return json(res, []);
   const placeholders = ids.map(() => '?').join(',');
   // Newest overall (any direction)
-  const overall = P.db().prepare(`
-    SELECT t.deal_id, m.id, m.thread_id, m.channel, m.sender, m.from_us, m.sent_at,
+  const overall = await P.db().prepare(`
+    SELECT DISTINCT ON (t.deal_id)
+           t.deal_id, m.id, m.thread_id, m.channel, m.sender, m.from_us, m.sent_at,
            m.snippet, m.body
     FROM messages m JOIN threads t ON t.id = m.thread_id
     WHERE t.deal_id IN (${placeholders})
-    GROUP BY t.deal_id HAVING MAX(m.sent_at)`).all(...ids);
+    ORDER BY t.deal_id, m.sent_at DESC`).all(...ids);
   // Newest brand message (from_us=0)
-  const brand = P.db().prepare(`
-    SELECT t.deal_id, m.id, m.thread_id, m.channel, m.sender, m.from_us, m.sent_at,
+  const brand = await P.db().prepare(`
+    SELECT DISTINCT ON (t.deal_id)
+           t.deal_id, m.id, m.thread_id, m.channel, m.sender, m.from_us, m.sent_at,
            m.snippet, m.body
     FROM messages m JOIN threads t ON t.id = m.thread_id
     WHERE t.deal_id IN (${placeholders}) AND m.from_us = 0
-    GROUP BY t.deal_id HAVING MAX(m.sent_at)`).all(...ids);
+    ORDER BY t.deal_id, m.sent_at DESC`).all(...ids);
   // Strip quoted reply chains (Gmail bodies include the entire thread quoted
   // under each message). For email channel only — WA bodies are already clean.
   const cleanBody = (r) => {
@@ -741,7 +745,7 @@ route('GET', '/api/messages/latest', async (req, res, { url }) => {
 // Plain-English "where we are" summary per deal — AI-generated, aggressively cached.
 // Regenerates only when deal.last_activity_at changes (so cost stays tiny).
 route('GET', '/api/deals/([^/]+)/summary', async (req, res, { match, url }) => {
-  const deal = P.data.getDeal(match[1]);
+  const deal = (await P.data.getDeal(match[1]));
   if (!deal) return json(res, { error:'not found' }, 404);
   const force = url.searchParams.get('force') === '1';
 
@@ -755,11 +759,11 @@ route('GET', '/api/deals/([^/]+)/summary', async (req, res, { match, url }) => {
 
   // Pull recent context: last 8 messages from the deal's threads (any channel).
   // 8 not 6 so we catch multi-round back-and-forth on rate negotiations.
-  const recent = P.db().prepare(`
+  const recent = (await P.db().prepare(`
     SELECT m.channel, m.sender, m.from_us, m.sent_at, m.body, m.snippet
     FROM messages m JOIN threads t ON t.id = m.thread_id
     WHERE t.deal_id = ?
-    ORDER BY m.sent_at DESC LIMIT 8`).all(deal.id).reverse();
+    ORDER BY m.sent_at DESC LIMIT 8`).all(deal.id)).reverse();
 
   // Strip Gmail quoted-reply chains BEFORE passing bodies to the AI — otherwise
   // each brand reply carries Riley's prior outbound underneath, and the AI
@@ -780,11 +784,11 @@ route('GET', '/api/deals/([^/]+)/summary', async (req, res, { match, url }) => {
   let creatorChat = [];
   if (deal.creator_id) {
     const chatRe = `%${deal.creator_id.toUpperCase()} X TRIIBE%`;
-    creatorChat = P.db().prepare(`
+    creatorChat = (await P.db().prepare(`
       SELECT m.sender, m.from_us, m.sent_at, m.body, m.snippet
       FROM messages m JOIN threads t ON t.id = m.thread_id
-      WHERE t.channel='whatsapp' AND t.subject LIKE ?
-      ORDER BY m.sent_at DESC LIMIT 8`).all(chatRe).reverse();
+      WHERE t.channel='whatsapp' AND t.subject ILIKE ?
+      ORDER BY m.sent_at DESC LIMIT 8`).all(chatRe)).reverse();
   }
 
   // Identify the LAST brand message — the summary MUST anchor on its actual
@@ -895,7 +899,7 @@ ${creatorChat.map(m => {
     const data = await r.json();
     const text = data.choices?.[0]?.message?.content?.trim() || '';
     // Cache
-    P.db().prepare(`UPDATE deals SET ai_summary=?, ai_summary_at=datetime('now'),
+    await P.db().prepare(`UPDATE deals SET ai_summary=?, ai_summary_at=datetime('now'),
       ai_summary_for=? WHERE id=?`).run(text, deal.last_activity_at || '', deal.id);
     json(res, { summary: text, cached: false, ai: true });
   } catch (e) {
@@ -905,8 +909,8 @@ ${creatorChat.map(m => {
 
 // Per-deal completeness checklist
 route('GET', '/api/deals/([^/]+)/checklist', async (req, res, { match }) => {
-  const d = P.data.getDeal(match[1]); if (!d) return json(res, { error: 'not found' }, 404);
-  const payments = P.db().prepare('SELECT * FROM payments WHERE deal_id=?').all(match[1]);
+  const d = (await P.data.getDeal(match[1])); if (!d) return json(res, { error: 'not found' }, 404);
+  const payments = await P.db().prepare('SELECT * FROM payments WHERE deal_id=?').all(match[1]);
   json(res, checklistForDeal(d, payments));
 });
 
@@ -914,18 +918,18 @@ route('GET', '/api/deals/([^/]+)/checklist', async (req, res, { match }) => {
 route('GET', '/api/anti-mistake', async (req, res, { url }) => {
   const creator = url.searchParams.get('creator') || undefined;
   const focus = url.searchParams.get('focus') === '1';
-  const deals = P.data.listDeals({ state: 'open', creator, focus, limit: 2000 });
-  const wonDeals = P.data.listDeals({ state: 'won',  creator, focus, limit: 2000 });
+  const deals = (await P.data.listDeals({ state: 'open', creator, focus, limit: 2000 }));
+  const wonDeals = (await P.data.listDeals({ state: 'won',  creator, focus, limit: 2000 }));
   const all = [...deals, ...wonDeals];
   // batch-fetch payments
   const paymentsByDeal = {};
-  for (const p of P.db().prepare('SELECT * FROM payments').all())
+  for (const p of await P.db().prepare('SELECT * FROM payments').all())
     (paymentsByDeal[p.deal_id] ||= []).push(p);
   json(res, antiMistakeReport(all, paymentsByDeal));
 });
 
 route('GET', '/api/pricing/([^/]+)', async (req, res, { match, url }) => {
-  const d = P.data.getDeal(match[1]); if (!d) return json(res, { error: 'not found' }, 404);
+  const d = (await P.data.getDeal(match[1])); if (!d) return json(res, { error: 'not found' }, 404);
   const offerStr = url.searchParams.get('offer');
   const offer = offerStr ? Math.round(parseFloat(offerStr) * 100) : null;
   json(res, suggestPrice(d, { brandOffer: offer }));
@@ -938,10 +942,10 @@ route('POST', '/api/quick-capture', async (req, res) => {
   // Build a preview of what would happen — UI shows this BEFORE we commit.
   const preview = previewIntent(intent);
   // Log every capture (audit).
-  P.data.log({ who:'riley', action:'quick_capture',
+  (await P.data.log({ who:'riley', action:'quick_capture',
     deal_id: intent.deal_id || null,
     summary: (body.text || '').slice(0, 200),
-    meta: intent });
+    meta: intent }));
   json(res, { intent, preview });
 });
 
@@ -956,30 +960,30 @@ route('POST', '/api/payments', async (req, res) => {
   const { deal_id, amount_cents, paid_at, method, note } = JSON.parse((await readBody(req)) || '{}');
   if (!deal_id || !amount_cents) return json(res, { error: 'deal_id + amount_cents required' }, 400);
   const id = `pay_${Date.now()}_${randomUUID().slice(0,6)}`;
-  const r = P.data.logPayment({ id, deal_id, amount_cents, paid_at, method, note });
-  P.data.log({ who:'riley', action:'payment_logged', deal_id, summary:`+$${amount_cents/100}`, meta:r });
+  const r = (await P.data.logPayment({ id, deal_id, amount_cents, paid_at, method, note }));
+  (await P.data.log({ who:'riley', action:'payment_logged', deal_id, summary:`+$${amount_cents/100}`, meta:r }));
   json(res, r);
 });
 
 // ---- Drafts -----------------------------------------------------------------
-route('GET', '/api/drafts', async (req, res) => json(res, P.data.listReadyDrafts()));
+route('GET', '/api/drafts', async (req, res) => json(res, (await P.data.listReadyDrafts())));
 
 route('POST', '/api/drafts/generate', async (req, res) => {
   const { deal_id, mode: requestedMode } = JSON.parse((await readBody(req)) || '{}');
-  const deal = P.data.getDeal(deal_id);
+  const deal = (await P.data.getDeal(deal_id));
   if (!deal) return json(res, { error: 'deal not found' }, 404);
 
   // Auto-pick mode from checklist if not explicitly requested.
   let mode = requestedMode, autoChose = false;
   if (!mode) {
-    const payments = P.db().prepare('SELECT * FROM payments WHERE deal_id=?').all(deal_id);
+    const payments = await P.db().prepare('SELECT * FROM payments WHERE deal_id=?').all(deal_id);
     const cl = checklistForDeal(deal, payments);
     mode = pickDraftMode(deal, cl);
     autoChose = true;
   }
 
   // Pull latest brand message if we have it (improves OpenAI context).
-  const latestMessage = P.db().prepare(`SELECT * FROM messages
+  const latestMessage = await P.db().prepare(`SELECT * FROM messages
     WHERE thread_id IN (SELECT id FROM threads WHERE deal_id=?)
       AND from_us=0
     ORDER BY sent_at DESC LIMIT 1`).get(deal_id);
@@ -991,22 +995,22 @@ route('POST', '/api/drafts/generate', async (req, res) => {
     ...composed,
     rationale: (composed.rationale || '') + (autoChose ? ` · mode auto-picked from checklist` : ''),
   };
-  P.data.saveDraft(draft);
-  P.data.log({ who:'system', action:'draft_generated', deal_id, summary: composed.rationale, meta:{ provider: composed.generated_by, mode, autoChose } });
+  (await P.data.saveDraft(draft));
+  (await P.data.log({ who:'system', action:'draft_generated', deal_id, summary: composed.rationale, meta:{ provider: composed.generated_by, mode, autoChose } }));
   json(res, draft);
 });
 
 route('POST', '/api/drafts/([^/]+)/(approve|reject)', async (req, res, { match }) => {
   const [_, id, action] = match;
   if (action === 'reject') {
-    P.data.setDraftStatus(id, 'rejected');
-    P.data.log({ who:'riley', action:'draft_rejected', summary: id });
+    (await P.data.setDraftStatus(id, 'rejected'));
+    (await P.data.log({ who:'riley', action:'draft_rejected', summary: id }));
     return json(res, { ok:true });
   }
   // Approve = send via the appropriate channel.
-  const draft = P.db().prepare('SELECT * FROM drafts WHERE id=?').get(id);
+  const draft = await P.db().prepare('SELECT * FROM drafts WHERE id=?').get(id);
   if (!draft) return json(res, { error:'draft not found' }, 404);
-  const deal  = P.data.getDeal(draft.deal_id);
+  const deal  = (await P.data.getDeal(draft.deal_id));
   if (!deal)  return json(res, { error:'deal not found' }, 404);
 
   // Edited body comes from request (user may have tweaked)
@@ -1023,9 +1027,9 @@ route('POST', '/api/drafts/([^/]+)/(approve|reject)', async (req, res, { match }
         subject: draft.subject,
         body,
       });
-      P.data.setDraftStatus(id, 'sent');
-      P.data.log({ who:'riley', action:'draft_sent', deal_id: draft.deal_id,
-        summary: `→ ${sendRes.to}`, meta: { gmail_message_id: sendRes.id }});
+      (await P.data.setDraftStatus(id, 'sent'));
+      (await P.data.log({ who:'riley', action:'draft_sent', deal_id: draft.deal_id,
+        summary: `→ ${sendRes.to}`, meta: { gmail_message_id: sendRes.id }}));
       // Re-pull the thread so the just-sent message lands in the local DB
       // immediately. Without this, the conversation view doesn't show the
       // send until the next full Gmail sync (~30s+).
@@ -1035,11 +1039,11 @@ route('POST', '/api/drafts/([^/]+)/(approve|reject)', async (req, res, { match }
       // audit so the verdict picks up the new state (often: ball flips,
       // chase chip changes, step status updates).
       try {
-        P.db().prepare(`UPDATE deals SET ai_summary_for = NULL WHERE id = ?`).run(draft.deal_id);
+        await P.db().prepare(`UPDATE deals SET ai_summary_for = NULL WHERE id = ?`).run(draft.deal_id);
         const apiKey = process.env.OPENAI_API_KEY;
         if (apiKey && P.cfg('ai_enabled','false') === 'true') {
           const { queueAudit } = await import('./engines/lifecycle_audit.js');
-          const dealRow = P.db().prepare(`SELECT * FROM deals WHERE id = ?`).get(draft.deal_id);
+          const dealRow = await P.db().prepare(`SELECT * FROM deals WHERE id = ?`).get(draft.deal_id);
           if (dealRow) queueAudit({ db: P.db(), deal: dealRow, apiKey, spend: P.spend });
         }
       } catch {}
@@ -1059,22 +1063,22 @@ route('GET', '/api/creator-chat/([^/]+)', async (req, res, { match, url }) => {
   if (!['cooper','charlie'].includes(creator))
     return json(res, { error:'unknown creator' }, 400);
   const chatNameLike = `%${creator.toUpperCase()} X TRIIBE%`;
-  const thread = P.db().prepare(`SELECT * FROM threads
-    WHERE channel='whatsapp' AND subject LIKE ?
+  const thread = await P.db().prepare(`SELECT * FROM threads
+    WHERE channel='whatsapp' AND subject ILIKE ?
     ORDER BY last_message_at DESC LIMIT 1`).get(chatNameLike);
   if (!thread) return json(res, { chat_name: `${creator.toUpperCase()} X TRIIBE`, messages: [], total: 0 });
 
   const limit = parseInt(url.searchParams.get('limit') || '15', 10);
-  const messages = P.db().prepare(`
+  const messages = (await P.db().prepare(`
     SELECT id, sender, from_us, sent_at, body, snippet,
            media_type, media_path, media_mime, media_filename, media_size
     FROM messages WHERE thread_id = ?
-    ORDER BY sent_at DESC LIMIT ?`).all(thread.id, limit).reverse();
+    ORDER BY sent_at DESC LIMIT ?`).all(thread.id, limit)).reverse();
   // Unread watermark: whichever is MORE RECENT — our last reply OR an explicit
   // "I've read up to here" stamp from when Riley opens the pill. The stamp
   // means "I saw these even though I haven't sent a reply yet."
-  const lastUsAt = P.db().prepare(`SELECT MAX(sent_at) m FROM messages
-    WHERE thread_id=? AND from_us=1`).get(thread.id).m;
+  const lastUsAt = (await P.db().prepare(`SELECT MAX(sent_at) m FROM messages
+    WHERE thread_id=? AND from_us=1`).get(thread.id)).m;
   const readThrough = thread.read_through_at || null;
   const watermark = [lastUsAt, readThrough].filter(Boolean).sort().pop() || null;
   const unread = watermark
@@ -1095,12 +1099,12 @@ route('POST', '/api/creator-chat/([^/]+)/mark-read', async (req, res, { match })
   if (!['cooper','charlie'].includes(creator))
     return json(res, { error:'unknown creator' }, 400);
   const chatNameLike = `%${creator.toUpperCase()} X TRIIBE%`;
-  const thread = P.db().prepare(`SELECT id FROM threads
-    WHERE channel='whatsapp' AND subject LIKE ?
+  const thread = await P.db().prepare(`SELECT id FROM threads
+    WHERE channel='whatsapp' AND subject ILIKE ?
     ORDER BY last_message_at DESC LIMIT 1`).get(chatNameLike);
   if (!thread) return json(res, { ok:false, reason:'no thread' });
   const now = new Date().toISOString();
-  P.db().prepare(`UPDATE threads SET read_through_at = ? WHERE id = ?`).run(now, thread.id);
+  await P.db().prepare(`UPDATE threads SET read_through_at = ? WHERE id = ?`).run(now, thread.id);
   json(res, { ok:true, read_through_at: now });
 });
 
@@ -1114,16 +1118,16 @@ route('POST', '/api/creator-chat/([^/]+)/suggest', async (req, res, { match }) =
     return json(res, { ok:false, reason:'AI not enabled' }, 400);
 
   // 1. Recent COOPER/CHARLIE X TRIIBE messages (last 10)
-  const chatThread = P.db().prepare(`SELECT id FROM threads
-    WHERE channel='whatsapp' AND subject LIKE ?
+  const chatThread = await P.db().prepare(`SELECT id FROM threads
+    WHERE channel='whatsapp' AND subject ILIKE ?
     ORDER BY last_message_at DESC LIMIT 1`).get(`%${creator.toUpperCase()} X TRIIBE%`);
   if (!chatThread) return json(res, { ok:false, reason:'no internal chat found' });
-  const chatMsgs = P.db().prepare(`SELECT sender, from_us, sent_at, body, snippet
-    FROM messages WHERE thread_id=? ORDER BY sent_at DESC LIMIT 10`).all(chatThread.id).reverse();
+  const chatMsgs = (await P.db().prepare(`SELECT sender, from_us, sent_at, body, snippet
+    FROM messages WHERE thread_id=? ORDER BY sent_at DESC LIMIT 10`).all(chatThread.id)).reverse();
   const lastFromCreator = [...chatMsgs].reverse().find(m => !m.from_us);
 
   // 2. ALL this creator's active deals (won + in-works/active/pitching/in conversation)
-  const deals = P.data.listDeals({ creator, limit: 1000 })
+  const deals = (await P.data.listDeals({ creator, limit: 1000 }))
     .filter(d => d.state === 'won' || ['conversation','pitching','in_works','active'].includes(d.funnel_stage))
     .filter(d => d.state !== 'lost')
     .sort((a,b) => (b.fee_cents||0) - (a.fee_cents||0))
@@ -1135,9 +1139,9 @@ route('POST', '/api/creator-chat/([^/]+)/suggest', async (req, res, { match }) =
   // questions without making things up.
   const ctxLines = [];
   for (const d of deals) {
-    const latestBrandMsgs = P.db().prepare(`SELECT m.sender, m.sent_at, m.body, m.snippet
+    const latestBrandMsgs = (await P.db().prepare(`SELECT m.sender, m.sent_at, m.body, m.snippet
       FROM messages m JOIN threads t ON t.id=m.thread_id
-      WHERE t.deal_id=? AND m.from_us=0 ORDER BY m.sent_at DESC LIMIT 2`).all(d.id).reverse();
+      WHERE t.deal_id=? AND m.from_us=0 ORDER BY m.sent_at DESC LIMIT 2`).all(d.id)).reverse();
     const fee = d.fee_cents ? '$' + (d.fee_cents/100).toLocaleString() : 'TBD';
     const stage = d.state === 'won' ? 'SIGNED' : d.funnel_stage;
     let line = `• ${d.brand} (${fee}, ${stage})`;
@@ -1213,10 +1217,10 @@ Write Riley's WhatsApp reply.`;
     // Tiny usage log
     const cost = Math.round((data.usage?.prompt_tokens||0) * 0.00025)
                + Math.round((data.usage?.completion_tokens||0) * 0.001);
-    P.spend.record({ provider:'openai', model:'gpt-4o', operation:'creator_chat_suggest',
+    (await P.spend.record({ provider:'openai', model:'gpt-4o', operation:'creator_chat_suggest',
       prompt_tokens: data.usage?.prompt_tokens || 0,
       completion_tokens: data.usage?.completion_tokens || 0,
-      est_cost_cents: cost });
+      est_cost_cents: cost }));
     json(res, { ok:true, body, deal_count: deals.length });
   } catch (e) {
     json(res, { ok:false, reason: e.message }, 500);
@@ -1228,17 +1232,17 @@ Write Riley's WhatsApp reply.`;
 // Used when deal.primary_channel === 'whatsapp'.
 route('POST', '/api/brand-wa-draft', async (req, res) => {
   const { deal_id, force_new = false } = JSON.parse((await readBody(req)) || '{}');
-  const deal = P.data.getDeal(deal_id);
+  const deal = (await P.data.getDeal(deal_id));
   if (!deal) return json(res, { error:'deal not found' }, 404);
 
   // Pull the WA thread linked to this deal
-  const waThread = P.db().prepare(`
+  const waThread = await P.db().prepare(`
     SELECT * FROM threads WHERE deal_id = ? AND channel = 'whatsapp'
     ORDER BY last_message_at DESC LIMIT 1`).get(deal_id);
   // Recent messages (last 15) for context
-  const waMsgs = waThread ? P.db().prepare(`
+  const waMsgs = waThread ? (await P.db().prepare(`
     SELECT id, sender, from_us, sent_at, body, snippet FROM messages
-    WHERE thread_id = ? ORDER BY sent_at DESC LIMIT 15`).all(waThread.id).reverse() : [];
+    WHERE thread_id = ? ORDER BY sent_at DESC LIMIT 15`).all(waThread.id)).reverse() : [];
 
   const apiKey = process.env.OPENAI_API_KEY;
   const aiEnabled = P.cfg('ai_enabled', 'false') === 'true' && apiKey;
@@ -1295,7 +1299,7 @@ Write Riley's next WhatsApp message.`;
 // creator (Cooper/Charlie) summarizing what the brand needs and by when.
 route('POST', '/api/creator-ping-draft', async (req, res) => {
   const { deal_id } = JSON.parse((await readBody(req)) || '{}');
-  const deal = P.data.getDeal(deal_id);
+  const deal = (await P.data.getDeal(deal_id));
   if (!deal) return json(res, { error:'deal not found' }, 404);
   const creator = (deal.creator_id || '').replace(/^./, c => c.toUpperCase());
 
@@ -1355,11 +1359,11 @@ FORMAT: plain text, no markdown. Specs in bullet list with · at line start. Bra
 
     // 1) Pull BRAND-side conversation (latest 5 messages from the brand's own thread)
     //    so the AI knows exactly what the brand just said.
-    const brandThreadRows = P.db().prepare(`
+    const brandThreadRows = (await P.db().prepare(`
       SELECT m.sender, m.from_us, m.sent_at, m.body, m.snippet, t.channel, t.subject
       FROM messages m JOIN threads t ON t.id = m.thread_id
       WHERE t.deal_id = ?
-      ORDER BY m.sent_at DESC LIMIT 5`).all(deal.id).reverse();
+      ORDER BY m.sent_at DESC LIMIT 5`).all(deal.id)).reverse();
     const brandBlock = brandThreadRows.length ? `\nBRAND CONVERSATION (last 5, oldest→newest):\n` + brandThreadRows.map(m => {
       const who = m.from_us ? 'Riley' : (m.sender || 'brand').split('<')[0].trim().slice(0,30);
       const when = (m.sent_at || '').slice(0,16).replace('T',' ');
@@ -1371,10 +1375,10 @@ FORMAT: plain text, no markdown. Specs in bullet list with · at line start. Bra
     const creatorChatRe = `%${(deal.creator_id || '').toUpperCase()} X TRIIBE%`;
     // Build brand keywords for filtering (e.g. "ZenBusiness Velo" → "velo")
     const brandWords = (deal.brand || '').split(/[\s(,\-—]+/).map(w => w.toLowerCase()).filter(w => w.length >= 4);
-    const allWaRows = P.db().prepare(`
+    const allWaRows = await P.db().prepare(`
       SELECT m.sender, m.from_us, m.sent_at, m.body, m.snippet
       FROM messages m JOIN threads t ON t.id = m.thread_id
-      WHERE m.channel='whatsapp' AND COALESCE(t.subject,'') LIKE ?
+      WHERE m.channel='whatsapp' AND COALESCE(t.subject,'') ILIKE ?
       ORDER BY m.sent_at DESC LIMIT 60`).all(creatorChatRe);
     const brandSpecific = allWaRows.filter(m => {
       const text = (m.body || m.snippet || '').toLowerCase();
@@ -1395,7 +1399,7 @@ FORMAT: plain text, no markdown. Specs in bullet list with · at line start. Bra
 
     // 4) Pull CONTRACT / BRIEF obligations so the AI can flag scope creep —
     //    brand asking for things NOT in what we signed for.
-    const contractRow = P.db().prepare(`SELECT extracted, usage_rights, exclusivity_days, payment_terms, fee_cents
+    const contractRow = await P.db().prepare(`SELECT extracted, usage_rights, exclusivity_days, payment_terms, fee_cents
       FROM contracts WHERE deal_id=? ORDER BY created_at DESC LIMIT 1`).get(deal.id);
     let scopeBlock = '';
     if (contractRow) {
@@ -1491,20 +1495,20 @@ Skip anything ${creator} already knows from the WA history above.`;
 // Pick the best (thread_id, msg_id) to reply on for a given deal. SKIPS
 // Google Docs / noreply / mailer-daemon "messages" — they're not real conversation
 // threads. Returns null if no usable target exists.
-function pickReplyTarget(deal_id) {
-  const row = P.db().prepare(`
+async function pickReplyTarget(deal_id) {
+  const row = await P.db().prepare(`
     SELECT m.id AS msg_id, m.thread_id, m.sender, m.sent_at
     FROM messages m
     JOIN threads t ON t.id = m.thread_id
     WHERE t.deal_id = ?
       AND m.from_us = 0
-      AND COALESCE(m.sender,'') NOT LIKE '%(via Google Docs)%'
-      AND COALESCE(m.sender,'') NOT LIKE '%(via Notion)%'
-      AND COALESCE(m.sender,'') NOT LIKE '%drive-shares-noreply%'
-      AND COALESCE(m.sender,'') NOT LIKE '%no-reply%'
-      AND COALESCE(m.sender,'') NOT LIKE '%noreply%'
-      AND COALESCE(m.sender,'') NOT LIKE '%mailer-daemon%'
-      AND COALESCE(t.subject,'') NOT LIKE 'Document shared with you:%'
+      AND COALESCE(m.sender,'') NOT ILIKE '%(via Google Docs)%'
+      AND COALESCE(m.sender,'') NOT ILIKE '%(via Notion)%'
+      AND COALESCE(m.sender,'') NOT ILIKE '%drive-shares-noreply%'
+      AND COALESCE(m.sender,'') NOT ILIKE '%no-reply%'
+      AND COALESCE(m.sender,'') NOT ILIKE '%noreply%'
+      AND COALESCE(m.sender,'') NOT ILIKE '%mailer-daemon%'
+      AND COALESCE(t.subject,'') NOT ILIKE 'Document shared with you:%'
     ORDER BY m.sent_at DESC LIMIT 1`).get(deal_id);
   return row || null;
 }
@@ -1516,7 +1520,7 @@ route('POST', '/api/draft-with-context', async (req, res) => {
   // If caller explicitly asked for nudge mode, force a fresh draft (don't reuse
   // an old "reply" draft) and tell the cooker which mode to use.
   const forceFresh = force_new || requestedMode === 'nudge';
-  const dealPre = P.data.getDeal(deal_id);
+  const dealPre = (await P.data.getDeal(deal_id));
   if (!dealPre) return json(res, { error:'deal not found' }, 404);
 
   // SAFETY GATE: pick the RIGHT thread to reply on (skip Google Docs / noreply
@@ -1528,48 +1532,48 @@ route('POST', '/api/draft-with-context', async (req, res) => {
     try { await pullSingleThread(P.db(), dealPre.thread_id); } catch {}
   }
   // Now pick the best reply target (might be a DIFFERENT thread than deal.thread_id).
-  const target = pickReplyTarget(deal_id);
+  const target = await pickReplyTarget(deal_id);
   // If we found a different thread, pull THAT one too so its messages are fresh.
   if (hasGmailToken() && target && target.thread_id !== dealPre.thread_id) {
     try { pulled = await pullSingleThread(P.db(), target.thread_id); }
     catch (e) { pulled = { ok:false, reason: e.message }; }
     // Persist the correction so future opens go straight to the right thread.
-    P.db().prepare(`UPDATE deals SET thread_id=?, latest_msg_id=? WHERE id=?`)
+    await P.db().prepare(`UPDATE deals SET thread_id=?, latest_msg_id=? WHERE id=?`)
       .run(target.thread_id, target.msg_id, deal_id);
   } else if (target) {
     pulled = { ok:true, last_at: target.sent_at, last_by:'them', thread_id: target.thread_id };
   }
-  const deal = P.data.getDeal(deal_id);
+  const deal = (await P.data.getDeal(deal_id));
 
   // Latest brand message (post-pull) — restricted to the corrected thread when known.
   const latestMsg = target
-    ? P.db().prepare(`SELECT * FROM messages WHERE id=?`).get(target.msg_id)
-    : P.db().prepare(`SELECT * FROM messages
+    ? await P.db().prepare(`SELECT * FROM messages WHERE id=?`).get(target.msg_id)
+    : await P.db().prepare(`SELECT * FROM messages
         WHERE thread_id IN (SELECT id FROM threads WHERE deal_id=?) AND from_us=0
         ORDER BY sent_at DESC LIMIT 1`).get(deal_id);
   // Reuse a recent ready draft if one exists (unless caller forces new)
   let draft = null;
   if (!forceFresh) {
-    draft = P.db().prepare(`SELECT * FROM drafts WHERE deal_id=? AND status='ready'
+    draft = await P.db().prepare(`SELECT * FROM drafts WHERE deal_id=? AND status='ready'
       ORDER BY created_at DESC LIMIT 1`).get(deal_id);
   }
   // If no usable draft, cook a fresh one with auto-mode (or the requested mode)
   if (!draft) {
-    const payments = P.db().prepare('SELECT * FROM payments WHERE deal_id=?').all(deal_id);
+    const payments = await P.db().prepare('SELECT * FROM payments WHERE deal_id=?').all(deal_id);
     const cl = checklistForDeal(deal, payments);
     const mode = requestedMode === 'nudge' ? 'nudge_follow_up' : pickDraftMode(deal, cl);
     // Pull the full email thread history (last 20 messages oldest→newest) for context.
     const replyThreadId = target?.thread_id || deal.thread_id;
-    const threadHistory = replyThreadId ? P.db().prepare(`
+    const threadHistory = replyThreadId ? (await P.db().prepare(`
       SELECT id, sender, from_us, sent_at, snippet, body, channel
       FROM messages WHERE thread_id = ?
-      ORDER BY sent_at DESC LIMIT 20`).all(replyThreadId).reverse() : [];
+      ORDER BY sent_at DESC LIMIT 20`).all(replyThreadId)).reverse() : [];
     // Pull related WhatsApp messages for this deal (last 20) — gives AI cross-channel context.
-    const waHistory = P.db().prepare(`
+    const waHistory = (await P.db().prepare(`
       SELECT m.id, m.sender, m.from_us, m.sent_at, m.snippet, m.body, m.channel
       FROM messages m JOIN threads t ON t.id = m.thread_id
       WHERE t.deal_id = ? AND m.channel = 'whatsapp'
-      ORDER BY m.sent_at DESC LIMIT 20`).all(deal_id).reverse();
+      ORDER BY m.sent_at DESC LIMIT 20`).all(deal_id)).reverse();
     const composed = await P.draft.draft({
       deal, latestMessage: latestMsg, mode,
       threadHistory, waHistory,
@@ -1585,14 +1589,14 @@ route('POST', '/api/draft-with-context', async (req, res) => {
       ...composed,
       status: 'ready',
     };
-    P.data.saveDraft(draft);
-    P.data.log({ who:'system', action:'draft_generated', deal_id, summary: composed.rationale, meta:{ mode, provider: composed.generated_by }});
+    (await P.data.saveDraft(draft));
+    (await P.data.log({ who:'system', action:'draft_generated', deal_id, summary: composed.rationale, meta:{ mode, provider: composed.generated_by }}));
   }
   json(res, { deal, latest_message: latestMsg, draft, gmail_pull: pulled });
 });
 
 // ---- Reminders --------------------------------------------------------------
-route('GET', '/api/reminders', async (req, res) => json(res, P.data.listReminders()));
+route('GET', '/api/reminders', async (req, res) => json(res, (await P.data.listReminders())));
 
 // ---- Calendar: posting events + deliveries + exclusivity blackouts ---------
 const MONTH_MAP = { jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12 };
@@ -1628,7 +1632,7 @@ route('GET', '/api/calendar', async (req, res, { url }) => {
   const creator = url.searchParams.get('creator') || 'cooper';
   const monthIso = url.searchParams.get('month') || new Date().toISOString().slice(0,7);
   // Pull every signed/in-works/active deal for this creator
-  const deals = P.data.listDeals({ creator, limit: 2000 })
+  const deals = (await P.data.listDeals({ creator, limit: 2000 }))
     .filter(d => d.state === 'won' || ['in_works','active','completed'].includes(d.funnel_stage));
 
   const events = [];      // posting events
@@ -1637,11 +1641,11 @@ route('GET', '/api/calendar', async (req, res, { url }) => {
 
   // Also pull ready drafts (= "approve & send today" deadlines) and
   // payments due (signed deals that haven't been paid yet → net-30 from posting).
-  const readyDrafts = P.db().prepare(`SELECT dr.id, dr.deal_id, d.brand, d.creator_id, d.fee_cents
+  const readyDrafts = await P.db().prepare(`SELECT dr.id, dr.deal_id, d.brand, d.creator_id, d.fee_cents
     FROM drafts dr JOIN deals d ON d.id = dr.deal_id
     WHERE dr.status='ready' AND d.creator_id = ?`).all(creator);
-  const paymentsDone = new Set(P.db().prepare(
-    'SELECT DISTINCT deal_id FROM payments WHERE status=?').all('paid').map(r => r.deal_id));
+  const paymentsDone = new Set((await P.db().prepare(
+    'SELECT DISTINCT deal_id FROM payments WHERE status=?').all('paid')).map(r => r.deal_id));
 
   for (const d of deals) {
     const post = d.posting_date || d.posting_window_start;
@@ -1704,7 +1708,7 @@ route('GET', '/api/contracts', async (req, res, { url }) => {
   const creator = url.searchParams.get('creator');
   const filter = creator ? 'AND d.creator_id = ?' : '';
   const args = creator ? [creator] : [];
-  const rows = P.db().prepare(`
+  const rows = await P.db().prepare(`
     SELECT c.id, c.deal_id, c.file_path, c.status, c.fee_cents, c.payment_terms,
            c.usage_rights, c.usage_expiry, c.exclusivity_days, c.redline_flags,
            c.extracted, c.created_at, d.brand, d.creator_id
@@ -1769,7 +1773,7 @@ route('POST', '/api/contracts/upload', async (req, res) => {
   // Dedupe: check by SHA-256 BEFORE writing to disk.
   const { createHash } = await import('node:crypto');
   const fileHash = createHash('sha256').update(fileBuf).digest('hex');
-  const existing = P.db().prepare(`SELECT c.id, c.file_path, c.deal_id, c.status, d.brand
+  const existing = await P.db().prepare(`SELECT c.id, c.file_path, c.deal_id, c.status, d.brand
     FROM contracts c LEFT JOIN deals d ON d.id = c.deal_id
     WHERE c.file_hash = ? LIMIT 1`).get(fileHash);
   if (existing) {
@@ -1795,13 +1799,13 @@ route('POST', '/api/contracts/upload', async (req, res) => {
   }
 
   // Resolve deal: by hint, or by smart brand match.
-  let deal = dealHint ? P.data.getDeal(dealHint) : null;
+  let deal = dealHint ? (await P.data.getDeal(dealHint)) : null;
   const norm = s => (s || '').toLowerCase()
     .replace(/\.(ai|com|io|co|app|inc)\b/g,'')
     .replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
   if (!deal) {
     const needle = norm(brandHint || fileName);
-    const candidates = P.data.listDeals({ limit: 2000 });
+    const candidates = (await P.data.listDeals({ limit: 2000 }));
     const matchBy = (brandStr) => {
       const b = norm(brandStr);
       if (!b) return null;
@@ -1830,7 +1834,7 @@ route('POST', '/api/contracts/upload', async (req, res) => {
   // Catches "PlayOS, Inc." → Sintra.ai (since PlayOS is Sintra's parent).
   if (!deal && extraction?.brand_party) {
     const needle2 = norm(extraction.brand_party);
-    const candidates = P.data.listDeals({ limit: 2000 });
+    const candidates = (await P.data.listDeals({ limit: 2000 }));
     deal = candidates.find(d => {
       const b = norm(d.brand);
       return b && (needle2.includes(b) || b.split(' ').some(w => w.length > 3 && needle2.includes(w)));
@@ -1847,7 +1851,7 @@ route('POST', '/api/contracts/upload', async (req, res) => {
 
   // Save to contracts table
   const cid = `c_${stamp}_${randomUUID().slice(0,6)}`;
-  P.db().prepare(`INSERT INTO contracts (id, deal_id, file_path, file_hash, status,
+  await P.db().prepare(`INSERT INTO contracts (id, deal_id, file_path, file_hash, status,
       fee_cents, payment_terms, usage_rights, usage_expiry, exclusivity_days,
       redline_flags, extracted)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
@@ -1872,18 +1876,18 @@ route('POST', '/api/contracts/upload', async (req, res) => {
     const obligationsJson = extraction?.obligations
       ? JSON.stringify(extraction.obligations)
       : null;
-    P.db().prepare(`UPDATE deals SET flags=?, last_activity_at=datetime('now'),
+    await P.db().prepare(`UPDATE deals SET flags=?, last_activity_at=datetime('now'),
       last_activity_by='us',
       obligations=COALESCE(?, obligations) WHERE id=?`)
       .run(JSON.stringify(flags), obligationsJson, deal.id);
-    P.data.log({ who:'riley', action:'contract_uploaded', deal_id: deal.id,
-      summary:`${fileName} → ${extraction?.summary || 'parsed'}` });
+    (await P.data.log({ who:'riley', action:'contract_uploaded', deal_id: deal.id,
+      summary:`${fileName} → ${extraction?.summary || 'parsed'}` }));
 
     // Tier-1 auto-promote: re-fetch the deal to get the freshest snapshot
     // (flags update above mutates the row) then push it to contract_received.
     try {
-      const freshDeal = P.data.getDeal(deal.id);
-      promotion = promoteFromContract({ db: P.db(), deal: freshDeal, extracted: extraction });
+      const freshDeal = (await P.data.getDeal(deal.id));
+      promotion = await promoteFromContract({ db: P.db(), deal: freshDeal, extracted: extraction });
       if (promotion.promoted) {
         console.log(`[auto-promote] ${deal.brand} → ${promotion.applied.new_raw_stage} (notif ${promotion.notification_id})`);
       }
@@ -1901,14 +1905,14 @@ route('POST', '/api/contracts/upload', async (req, res) => {
 // Delete a contract (DB record + file on disk).
 route('POST', '/api/contracts/([^/]+)/delete', async (req, res, { match }) => {
   const id = match[1];
-  const row = P.db().prepare('SELECT id, file_path FROM contracts WHERE id=?').get(id);
+  const row = await P.db().prepare('SELECT id, file_path FROM contracts WHERE id=?').get(id);
   if (!row) return json(res, { ok:false, reason:'not found' }, 404);
   try {
     const full = row.file_path?.startsWith('/') ? row.file_path : `${ROOT}/${row.file_path}`;
     const fs = await import('node:fs');
     if (fs.existsSync(full)) fs.unlinkSync(full);
   } catch (e) { /* ignore — DB row deletion is the source of truth */ }
-  P.db().prepare('DELETE FROM contracts WHERE id=?').run(id);
+  await P.db().prepare('DELETE FROM contracts WHERE id=?').run(id);
   json(res, { ok:true, deleted: id });
 });
 
@@ -1917,7 +1921,7 @@ function tryParse(s, fallback) { try { return s ? JSON.parse(s) : fallback; } ca
 // ---- Can-we-do pre-commit clash check ---------------------------------------
 route('POST', '/api/can-we-do', async (req, res) => {
   const { creator, category, date } = JSON.parse((await readBody(req)) || '{}');
-  const deals = P.data.listDeals({ state: 'open', limit: 2000 });
+  const deals = (await P.data.listDeals({ state: 'open', limit: 2000 }));
   json(res, canDo({ deals, creator, category, date }));
 });
 
@@ -1958,7 +1962,7 @@ route('POST', '/api/desk/ask', async (req, res) => {
 
   // Build compact deal lines: brand · stage · fee · ball · days quiet · chase
   // · post date · last summary (truncated). One line per deal, max 25 deals.
-  const formatDeal = (d) => {
+  const formatDeal = async (d) => {
     const fee = d.fee_cents ? `$${(d.fee_cents/100/1000).toFixed(1)}K` : 'no$';
     const ball = d.ball_in_court === 'brand' ? 'ball:brand' :
                  d.ball_in_court === 'us' || d.ball_in_court === 'riley' ? 'ball:us' : 'ball:?';
@@ -1968,12 +1972,12 @@ route('POST', '/api/desk/ask', async (req, res) => {
       kd.post && `post:${kd.post}`, kd.script_due && `script:${kd.script_due}`,
       kd.draft_due && `draft:${kd.draft_due}`, kd.payment_due && `pay:${kd.payment_due}`,
     ].filter(Boolean).join(' ');
-    const deal = P.db().prepare(`SELECT ai_summary, contact_name FROM deals WHERE id=?`).get(d.deal_id);
+    const deal = await P.db().prepare(`SELECT ai_summary, contact_name FROM deals WHERE id=?`).get(d.deal_id);
     const summary = (deal?.ai_summary || '').replace(/\s+/g,' ').slice(0, 220);
     const contact = deal?.contact_name || '?';
     // How recently Riley sent an outbound to this deal — critical signal so
     // the desk doesn't suggest a fresh nudge for something he just nudged.
-    const lastOurs = P.db().prepare(`SELECT MAX(m.sent_at) AS t
+    const lastOurs = await P.db().prepare(`SELECT MAX(m.sent_at) AS t
       FROM messages m JOIN threads t ON t.id=m.thread_id
       WHERE t.deal_id=? AND m.from_us=1`).get(d.deal_id);
     const lastOurAt = lastOurs?.t || null;
@@ -1988,10 +1992,10 @@ route('POST', '/api/desk/ask', async (req, res) => {
   // Partition pending deals by recent action. Anything you nudged in the last
   // 48h goes into a "do-not-suggest" sidebar so the AI sees the state but
   // can't recommend chasing it again until the brand has had time to reply.
-  const partition = (list) => {
+  const partition = async (list) => {
     const live = [], recent = [];
-    (list || []).forEach(d => {
-      const lastOurs = P.db().prepare(`SELECT MAX(m.sent_at) AS t
+    for (const d of (list || [])) {
+      const lastOurs = await P.db().prepare(`SELECT MAX(m.sent_at) AS t
         FROM messages m JOIN threads t ON t.id=m.thread_id
         WHERE t.deal_id=? AND m.from_us=1`).get(d.deal_id);
       const hoursSinceOurs = lastOurs?.t
@@ -1999,14 +2003,14 @@ route('POST', '/api/desk/ask', async (req, res) => {
         : null;
       if (hoursSinceOurs != null && hoursSinceOurs < 48) recent.push(d);
       else live.push(d);
-    });
+    }
     return { live, recent };
   };
-  const conf = partition(tw?.deals);
-  const pend = partition(tw?.pending);
-  const confirmed = conf.live.slice(0, 12).map(formatDeal).join('\n');
-  const pending   = pend.live.slice(0, 15).map(formatDeal).join('\n');
-  const recentlyActed = [...conf.recent, ...pend.recent].slice(0, 10).map(formatDeal).join('\n');
+  const conf = await partition(tw?.deals);
+  const pend = await partition(tw?.pending);
+  const confirmed = (await Promise.all(conf.live.slice(0, 12).map(formatDeal))).join('\n');
+  const pending   = (await Promise.all(pend.live.slice(0, 15).map(formatDeal))).join('\n');
+  const recentlyActed = (await Promise.all([...conf.recent, ...pend.recent].slice(0, 10).map(formatDeal))).join('\n');
 
   const pulse = mp ? `MTD: $${Math.round((mp.booked_cents||0)/100)} booked of $${Math.round((mp.target_cents||0)/100)} target (${mp.pct}%, pace ${mp.expected_pct}%). Projected with open pitches: $${Math.round((mp.projected_cents||0)/100)}.` : 'pulse unavailable';
 
@@ -2086,7 +2090,7 @@ Return the JSON object now. Pick specific brands and use exact deal_ids from the
         suggestion: String(a.suggestion || '').slice(0, 600),
       })).slice(0, 6);
     const usage = data.usage || {};
-    P.spend?.record?.({
+    await P.spend?.record?.({
       provider:'openai', model:'gpt-4o-mini', operation:'desk_ask',
       prompt_tokens: usage.prompt_tokens||0, completion_tokens: usage.completion_tokens||0,
       est_cost_cents: Math.ceil(((usage.prompt_tokens||0)*0.000015 + (usage.completion_tokens||0)*0.00006) * 100),
@@ -2110,14 +2114,14 @@ route('POST', '/api/desk/check-actions', async (req, res) => {
   for await (const c of req) body += c;
   const items = JSON.parse(body || '[]');
   if (!Array.isArray(items)) return json(res, []);
-  const out = items.map(it => {
-    const r = P.db().prepare(`
+  const out = await Promise.all(items.map(async (it) => {
+    const r = await P.db().prepare(`
       SELECT MAX(m.sent_at) AS acted_at
       FROM messages m JOIN threads t ON t.id = m.thread_id
       WHERE t.deal_id = ? AND m.from_us = 1 AND m.sent_at > ?`)
       .get(it.deal_id, it.since || '2000-01-01');
     return { deal_id: it.deal_id, acted: !!r?.acted_at, acted_at: r?.acted_at || null };
-  });
+  }));
   json(res, out);
 });
 
@@ -2131,7 +2135,7 @@ route('POST', '/api/sync', async (req, res) => {
     `]);
     const { stdout } = await pexec('node', ['--no-warnings', `${ROOT}/db/migrate.js`]);
     // Now ingest threads + messages (Gmail headers + WhatsApp full bodies).
-    const ingestStats = ingestAll(P.db());
+    const ingestStats = await ingestAll(P.db());
     // If Gmail OAuth is set up, also do a LIVE pull (bodies + ball-in-court flips).
     let gmailLive = null;
     if (hasGmailToken()) {
@@ -2162,7 +2166,7 @@ route('POST', '/api/sync', async (req, res) => {
     // tracking columns (last_message_at/by, ball_in_court) stay accurate.
     // Critical: without this, your own outbound replies that get re-indexed by
     // Gmail don't flip the ball back to brand, and Inbox lies to you.
-    const reconciled = reconcileThreadStates({ db: P.db() });
+    const reconciled = await reconcileThreadStates({ db: P.db() });
     // Queue AI lifecycle audits for any deal that had activity recently. The
     // queue is debounced per-deal so a burst of msgs = one audit. This is the
     // mechanism that makes the lifecycle checklist auto-update without manual
@@ -2174,7 +2178,7 @@ route('POST', '/api/sync', async (req, res) => {
       if (apiKey && P.cfg('ai_enabled','false') === 'true') {
         const { queueAudit } = await import('./engines/lifecycle_audit.js');
         // Any deal touched in the last 5 minutes (covers Gmail + WA new activity)
-        const recentDeals = P.db().prepare(`
+        const recentDeals = await P.db().prepare(`
           SELECT id, brand, creator_id, fee_cents, posting_date, funnel_stage,
                  raw_stage, state, payment_terms_days
           FROM deals
@@ -2190,9 +2194,9 @@ route('POST', '/api/sync', async (req, res) => {
     } catch (e) {
       console.warn('lifecycle audit queue err:', e.message);
     }
-    P.data.log({ who:'riley', action:'sync',
+    (await P.data.log({ who:'riley', action:'sync',
       summary:'re-snapshot + re-migrate + ingest + live Gmail + WA backfill + reconcile + lifecycle audit queue',
-      meta: { ingest: ingestStats, gmail_live: gmailLive, wa_backfill: waBackfill, reconcile: reconciled, lifecycle_queued: lifecycleQueued } });
+      meta: { ingest: ingestStats, gmail_live: gmailLive, wa_backfill: waBackfill, reconcile: reconciled, lifecycle_queued: lifecycleQueued } }));
     json(res, { ok:true, log: stdout.trim().split('\n').slice(-8), ingest: ingestStats, gmail_live: gmailLive, wa_backfill: waBackfill, reconcile: reconciled });
   } catch (e) {
     json(res, { ok:false, error: e.message }, 500);
@@ -2201,7 +2205,7 @@ route('POST', '/api/sync', async (req, res) => {
 
 // Manual reconcile — useful if state ever drifts. Cheap, idempotent.
 route('POST', '/api/reconcile', async (req, res) => {
-  const r = reconcileThreadStates({ db: P.db() });
+  const r = await reconcileThreadStates({ db: P.db() });
   json(res, { ok:true, ...r });
 });
 
@@ -2211,7 +2215,7 @@ route('POST', '/api/lifecycle/audit/([^/]+)', async (req, res, { match }) => {
   const deal_id = decodeURIComponent(match[1]);
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return json(res, { ok:false, reason:'no OPENAI_API_KEY' }, 503);
-  const deal = P.db().prepare('SELECT * FROM deals WHERE id = ?').get(deal_id);
+  const deal = await P.db().prepare('SELECT * FROM deals WHERE id = ?').get(deal_id);
   if (!deal) return json(res, { ok:false, reason:'deal not found' }, 404);
   const { auditDealLifecycle } = await import('./engines/lifecycle_audit.js');
   const verdict = await auditDealLifecycle({ db: P.db(), deal, apiKey, spend: P.spend });
@@ -2225,7 +2229,7 @@ route('POST', '/api/lifecycle/audit-all', async (req, res) => {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) return json(res, { ok:false, reason:'no OPENAI_API_KEY' }, 503);
   const { auditDealLifecycle } = await import('./engines/lifecycle_audit.js');
-  const active = P.db().prepare(`
+  const active = await P.db().prepare(`
     SELECT * FROM deals
     WHERE state != 'lost'
       AND funnel_stage NOT IN ('cold','dormant')
@@ -2263,7 +2267,7 @@ route('POST', '/api/classify-backfill', async (req, res) => {
   // Pick brand-inbound messages without classification, joined to deals so we
   // can pass deal context to the classifier. Oldest-first so historical state
   // gets backfilled in chronological order.
-  const rows = P.db().prepare(`
+  const rows = await P.db().prepare(`
     SELECT m.id, m.body, m.snippet, m.sent_at,
            d.id AS deal_id, d.brand, d.funnel_stage, d.raw_stage, d.fee_cents, d.obligations
     FROM messages m
@@ -2285,7 +2289,7 @@ route('POST', '/api/classify-backfill', async (req, res) => {
         obligations,
       });
       if (cls) {
-        P.db().prepare(`UPDATE messages SET classification=? WHERE id=?`)
+        await P.db().prepare(`UPDATE messages SET classification=? WHERE id=?`)
           .run(JSON.stringify(cls), r.id);
         done++;
       }
@@ -2301,7 +2305,7 @@ route('POST', '/api/sync/whatsapp', async (req, res) => {
   const r = await runWhatsAppPull();
   // Reconcile after WA pull too so the message-state truth propagates
   if (r && r.ok !== false) {
-    try { reconcileThreadStates({ db: P.db() }); } catch {}
+    try { await reconcileThreadStates({ db: P.db() }); } catch {}
   }
   if (r === null) return json(res, { ok:false, reason:'already running' }, 429);
   json(res, r);
@@ -2360,7 +2364,7 @@ route('POST', '/api/wa/send', async (req, res) => {
   if (!chat_name || !text) return json(res, { ok:false, reason:'chat_name + text required' }, 400);
   const r = await waDaemonSend({ chat_name, text });
   if (r.ok && deal_id) {
-    P.data.log({ who:'riley', action:'wa_sent', deal_id, summary:`→ ${chat_name}: ${text.slice(0,80)}` });
+    (await P.data.log({ who:'riley', action:'wa_sent', deal_id, summary:`→ ${chat_name}: ${text.slice(0,80)}` }));
   }
   json(res, r);
 });
@@ -2413,9 +2417,9 @@ route('GET', '/api/freshness', async (req, res) => {
 });
 
 // ---- Spend / AI control ----------------------------------------------------
-route('GET', '/api/spend', async (req, res) => json(res, P.spend.status()));
+route('GET', '/api/spend', async (req, res) => json(res, (await P.spend.status())));
 route('POST', '/api/spend/kill', async (req, res) => {
-  P.db().prepare(`UPDATE config SET value='false', updated_at=datetime('now') WHERE key='ai_enabled'`).run();
+  await P.db().prepare(`UPDATE config SET value='false', updated_at=datetime('now') WHERE key='ai_enabled'`).run();
   P.reload();
   json(res, { ok:true, ai_enabled:false });
 });
@@ -2424,8 +2428,8 @@ route('POST', '/api/ai/toggle', async (req, res) => {
   const want = body.enabled ? 'true' : 'false';
   if (want === 'true' && !process.env.OPENAI_API_KEY)
     return json(res, { ok:false, reason:'OPENAI_API_KEY missing — paste it into .env and restart the server first.' }, 400);
-  P.db().prepare(`UPDATE config SET value=?, updated_at=datetime('now') WHERE key='ai_enabled'`).run(want);
-  P.db().prepare(`UPDATE config SET value=?, updated_at=datetime('now') WHERE key='draft_provider'`).run(want === 'true' ? 'openai' : 'local-stub');
+  await P.db().prepare(`UPDATE config SET value=?, updated_at=datetime('now') WHERE key='ai_enabled'`).run(want);
+  await P.db().prepare(`UPDATE config SET value=?, updated_at=datetime('now') WHERE key='draft_provider'`).run(want === 'true' ? 'openai' : 'local-stub');
   P.reload();
   json(res, { ok:true, ai_enabled: want === 'true', provider: want === 'true' ? 'openai:gpt-4o' : 'local-stub' });
 });
@@ -2435,7 +2439,7 @@ route('POST', '/api/ai/toggle', async (req, res) => {
 // strip in the expanded pill.
 route('GET', '/api/deals/([^/]+)/attachments', async (req, res, { match }) => {
   const dealId = match[1];
-  const fromThreads = P.db().prepare(`
+  const fromThreads = await P.db().prepare(`
     SELECT a.id, a.message_id, a.thread_id, a.channel, a.media_path, a.media_filename,
            a.media_mime, a.media_size, a.media_type, a.created_at,
            m.sent_at, m.sender
@@ -2445,7 +2449,7 @@ route('GET', '/api/deals/([^/]+)/attachments', async (req, res, { match }) => {
     WHERE t.deal_id = ?
     ORDER BY m.sent_at DESC`).all(dealId);
   // Contracts uploaded via the drop zone (separate path)
-  const contracts = P.db().prepare(`
+  const contracts = await P.db().prepare(`
     SELECT id, file_path AS media_path, status, fee_cents, created_at
     FROM contracts WHERE deal_id = ? ORDER BY created_at DESC`).all(dealId);
   json(res, {
@@ -2474,7 +2478,7 @@ route('GET', '/api/deals/([^/]+)/attachments', async (req, res, { match }) => {
 route('GET', '/api/system/tunnel', async (req, res) => {
   try {
     const fs = await import('node:fs');
-    const path = '/Users/rileywallack/triibe-platform/config/tunnel.json';
+    const path = join(ROOT, 'config', 'tunnel.json');
     if (!fs.existsSync(path)) return json(res, { ok:false, reason:'no tunnel running' });
     const data = JSON.parse(fs.readFileSync(path, 'utf8'));
     json(res, { ok:true, ...data });
@@ -2487,9 +2491,9 @@ route('POST', '/api/deals/([^/]+)/state', async (req, res, { match }) => {
   const body = JSON.parse((await readBody(req)) || '{}');
   if (!['open','won','lost','dormant'].includes(body.state))
     return json(res, { ok:false, reason:'invalid state' }, 400);
-  P.db().prepare(`UPDATE deals SET state=?, updated_at=datetime('now') WHERE id=?`)
+  await P.db().prepare(`UPDATE deals SET state=?, updated_at=datetime('now') WHERE id=?`)
     .run(body.state, dealId);
-  P.data.log({ who:'riley', action:'state_change', deal_id: dealId, summary:`→ ${body.state}` });
+  (await P.data.log({ who:'riley', action:'state_change', deal_id: dealId, summary:`→ ${body.state}` }));
   json(res, { ok:true });
 });
 
@@ -2505,13 +2509,13 @@ route('GET', '/api/this-week', async (req, res, { url }) => {
   // Park revival — flip any dormant deal whose revisit date is here into 'open'
   // BEFORE building this-week, so revived deals show up in Pitches the moment
   // their wait period ends. Idempotent + cheap (single indexed UPDATE).
-  try { revivePastDueParked(P.db()); } catch {}
+  try { await revivePastDueParked(P.db()); } catch {}
   // Auto-park sweeper — opposite side of the revival coin. Quietly parks deals
   // where brand has been silent ≥14d after ≥2 unanswered nudges, so Riley's
   // pipeline doesn't accumulate dead-but-not-marked threads. Idempotent: only
   // touches state=open deals matching the rule.
   let autoParked = { parked: [], count: 0 };
-  try { autoParked = autoParkStaleDeals(P.db()); } catch (e) { console.error('auto_park:', e.message); }
+  try { autoParked = await autoParkStaleDeals(P.db()); } catch (e) { console.error('auto_park:', e.message); }
   const data = await buildThisWeek({ db: P.db(), creator, apiKey, stripQuotedReply });
   // Surface auto-park result on the response so the UI can show "3 deals parked"
   if (autoParked.count) data.auto_parked = autoParked.parked;
@@ -2579,7 +2583,7 @@ route('GET', '/api/this-week', async (req, res, { url }) => {
         AND (managed_by IS NULL OR managed_by = 'riley')
         AND fee_cents IS NOT NULL AND fee_cents > 0
       ORDER BY last_activity_at DESC`);
-    const convDeals = convQuery.all(creator)
+    const convDeals = (await convQuery.all(creator))
       .filter(d => !existingIds.has(d.id) && recent(d.last_activity_at))
       .map(d => {
         const ourUSD = Math.round(d.fee_cents / 100).toLocaleString();
@@ -2606,13 +2610,13 @@ route('GET', '/api/this-week', async (req, res, { url }) => {
     // brand recency, exclusivity clash risk, category saturation. Sort by score
     // descending so the closest-to-close deals float to the top.
     if ((data.pending || []).length) {
-      const allActiveDeals = P.db().prepare(`SELECT * FROM deals WHERE state IN ('open','won')`).all();
+      const allActiveDeals = await P.db().prepare(`SELECT * FROM deals WHERE state IN ('open','won')`).all();
       // Map deal_id → enriched negotiation data from rate-pitched query
       const rpById = {};
       for (const r of (rpData || [])) rpById[r.id] = r;
       for (const p of data.pending) {
         // Pull full deal row + neg data (counter, our quote, latest brand reply)
-        const deal = P.db().prepare(`SELECT * FROM deals WHERE id=?`).get(p.deal_id) || p;
+        const deal = await P.db().prepare(`SELECT * FROM deals WHERE id=?`).get(p.deal_id) || p;
         const neg = rpById[p.deal_id] || {};
         try {
           const cs = computeCloseScore({
@@ -2641,7 +2645,7 @@ route('GET', '/api/this-week', async (req, res, { url }) => {
       // $1K+ + ball-on-us 4-30d OR ball-on-brand 5-21d.
       const DAY = 86400_000;
       for (const p of data.pending) {
-        const deal = P.db().prepare(`SELECT ball_in_court, last_activity_at FROM deals WHERE id=?`).get(p.deal_id);
+        const deal = await P.db().prepare(`SELECT ball_in_court, last_activity_at FROM deals WHERE id=?`).get(p.deal_id);
         if (!deal || !deal.last_activity_at) continue;
         if ((p.fee_cents || 0) < 100_000) continue;
         const daysQuiet = Math.floor((Date.now() - new Date(deal.last_activity_at).getTime()) / DAY);
@@ -2685,7 +2689,7 @@ route('GET', '/api/this-week', async (req, res, { url }) => {
     const allIds = [...(data.deals || []), ...(data.pending || [])].map(d => d.deal_id);
     if (allIds.length) {
       const placeholders = allIds.map(() => '?').join(',');
-      const unreadRows = P.db().prepare(`
+      const unreadRows = await P.db().prepare(`
         SELECT t.deal_id, t.last_message_at, t.last_message_by, t.channel,
                (SELECT m.sender FROM messages m WHERE m.thread_id=t.id AND m.from_us=0
                 ORDER BY m.sent_at DESC LIMIT 1) AS brand_sender,
@@ -2749,7 +2753,7 @@ route('GET', '/api/this-week', async (req, res, { url }) => {
     const allIds = [...(data.deals || []), ...(data.pending || [])].map(d => d.deal_id);
     if (allIds.length) {
       const placeholders = allIds.map(() => '?').join(',');
-      const outboundRows = P.db().prepare(`
+      const outboundRows = await P.db().prepare(`
         SELECT t.deal_id,
                (SELECT m.sent_at FROM messages m WHERE m.thread_id=t.id AND m.from_us=1
                 ORDER BY m.sent_at DESC LIMIT 1) AS sent_at,
@@ -2821,8 +2825,8 @@ route('POST', '/api/this-week/(complete|uncomplete)', async (req, res, { match }
   if (!body.deal_id || !body.action_kind)
     return json(res, { ok:false, reason:'deal_id + action_kind required' }, 400);
   const mod = await import('./engines/this_week.js');
-  if (action === 'complete')   json(res, mod.completeAction({ db: P.db(), ...body }));
-  else                          json(res, mod.uncompleteAction({ db: P.db(), ...body }));
+  if (action === 'complete')   json(res, await mod.completeAction({ db: P.db(), ...body }));
+  else                          json(res, await mod.uncompleteAction({ db: P.db(), ...body }));
 });
 
 // ---- Today's Plays — the AI brain ---------------------------------------
@@ -2838,7 +2842,7 @@ route('GET', '/api/plays', async (req, res, { url }) => {
     return json(res, { ...cached.data, cached: true, age_sec: Math.round((Date.now() - cached.at)/1000) });
   }
   const { gatherSignals, rankWithAI } = await import('./engines/plays.js');
-  const raw = gatherSignals({ db: P.db(), creator });
+  const raw = await gatherSignals({ db: P.db(), creator });
   // Run AI rank only if AI is on AND we have enough signals to make ranking worthwhile
   let plays = raw.slice(0, 7);
   if (raw.length >= 3 && process.env.OPENAI_API_KEY && P.cfg('ai_enabled','false') === 'true') {
@@ -2858,9 +2862,9 @@ route('GET', '/api/plays', async (req, res, { url }) => {
 // Per-deal fit score (1-10) — for Rate Pitched + leads view.
 // Pure computation, no AI cost.
 route('GET', '/api/deals/([^/]+)/fit-score', async (req, res, { match }) => {
-  const deal = P.data.getDeal(match[1]);
+  const deal = (await P.data.getDeal(match[1]));
   if (!deal) return json(res, { error: 'not found' }, 404);
-  json(res, computeFitScore({ deal, db: P.db() }));
+  json(res, await computeFitScore({ deal, db: P.db() }));
 });
 
 // Per-deal rate negotiation parse — what's actually on the table.
@@ -2869,15 +2873,15 @@ route('GET', '/api/deals/([^/]+)/fit-score', async (req, res, { match }) => {
 // When brand's number matches our ask, marks accepted=true so the UI can render
 // "Brand accepted $X" instead of duplicating the figure as a "counter".
 route('GET', '/api/deals/([^/]+)/negotiation', async (req, res, { match }) => {
-  const deal = P.data.getDeal(match[1]);
+  const deal = (await P.data.getDeal(match[1]));
   if (!deal) return json(res, { error: 'not found' }, 404);
 
-  const lb = P.db().prepare(`
+  const lb = await P.db().prepare(`
     SELECT m.body, m.snippet, m.sent_at, m.channel
     FROM messages m JOIN threads t ON t.id = m.thread_id
     WHERE t.deal_id = ? AND m.from_us = 0
     ORDER BY m.sent_at DESC LIMIT 1`).get(deal.id);
-  const lo = P.db().prepare(`
+  const lo = await P.db().prepare(`
     SELECT m.body, m.snippet, m.sent_at, m.channel
     FROM messages m JOIN threads t ON t.id = m.thread_id
     WHERE t.deal_id = ? AND m.from_us = 1
@@ -2930,7 +2934,7 @@ route('GET', '/api/deals/([^/]+)/negotiation', async (req, res, { match }) => {
   });
 });
 
-function computeFitScore({ deal, db }) {
+async function computeFitScore({ deal, db }) {
   // Pull rate card for this creator
   const card = (deal.creator_id && RATE_CARD[deal.creator_id]) || {};
   let score = 50;  // start neutral
@@ -2955,7 +2959,7 @@ function computeFitScore({ deal, db }) {
   const stageBonus = { conversation: 5, pitching: 8, in_works: 13, active: 15, completed: 15 };
   score += stageBonus[deal.funnel_stage] || 0;
   // (4) Category concentration check
-  const allDeals = db.prepare(`SELECT * FROM deals WHERE creator_id=? AND state IN ('open','won')`).all(deal.creator_id);
+  const allDeals = await db.prepare(`SELECT * FROM deals WHERE creator_id=? AND state IN ('open','won')`).all(deal.creator_id);
   const sameCategory = allDeals.filter(d => d.id !== deal.id && d.category && d.category === deal.category);
   if (sameCategory.length > 3) { score -= 10; reasons.push(`⚠ ${sameCategory.length} other ${deal.category} deals active — category concentration`); }
   // (5) Days idle penalty
@@ -2988,7 +2992,7 @@ route('GET', '/api/follow-ups', async (req, res, { url }) => {
   // deal auto-moves to Inbox. The moment Riley replies → ball=them → deal
   // auto-moves back here. One source of truth per state.
   const onUs = new Set(
-    P.db().prepare(`SELECT id FROM deals WHERE ball_in_court='us'`).all().map(r => r.id)
+    (await P.db().prepare(`SELECT id FROM deals WHERE ball_in_court='us'`).all()).map(r => r.id)
   );
 
   // A: rate-pitched without active engagement AND ball not on us
@@ -3002,7 +3006,7 @@ route('GET', '/api/follow-ups', async (req, res, { url }) => {
   });
 
   // B: conversation-stage deals with no money in motion AND ball not on us
-  const convDeals = P.db().prepare(`
+  const convDeals = await P.db().prepare(`
     SELECT * FROM deals
     WHERE funnel_stage = 'conversation' AND state = 'open'
       AND (managed_by IS NULL OR managed_by = 'riley')
@@ -3030,29 +3034,25 @@ route('GET', '/api/follow-ups', async (req, res, { url }) => {
 
 route('GET', '/api/rate-pitched', async (req, res, { url }) => {
   const creator = url.searchParams.get('creator') || null;
-  const deals = P.data.listDeals({ creator, limit: 2000 })
+  const deals = (await P.data.listDeals({ creator, limit: 2000 }))
     .filter(d => d.funnel_stage === 'pitching' && d.state !== 'lost');
   // For each deal: find brand's latest message + our latest outbound, extract $ figures
   const ids = deals.map(d => d.id);
-  const latestBrand = ids.length ? Object.fromEntries(P.db().prepare(`
-    SELECT t.deal_id, m.body, m.snippet, m.sent_at FROM messages m
+  const latestBrand = ids.length ? Object.fromEntries((await P.db().prepare(`
+    SELECT DISTINCT ON (t.deal_id) t.deal_id, m.body, m.snippet, m.sent_at FROM messages m
     JOIN threads t ON t.id = m.thread_id
     WHERE t.deal_id IN (${ids.map(()=>'?').join(',')})
       AND m.from_us = 0
-      AND m.id IN (SELECT id FROM messages WHERE thread_id=t.id AND from_us=0
-                   ORDER BY sent_at DESC LIMIT 1)
-    GROUP BY t.deal_id`).all(...ids).map(r => [r.deal_id, r])) : {};
+    ORDER BY t.deal_id, m.sent_at DESC`).all(...ids)).map(r => [r.deal_id, r])) : {};
   // Our latest outbound — used to AUTO-DETECT what we pitched when fee_cents
   // isn't logged. We scan Riley's latest message for the highest $ figure;
   // that's almost always the rate we proposed.
-  const latestOurs = ids.length ? Object.fromEntries(P.db().prepare(`
-    SELECT t.deal_id, m.body, m.snippet, m.sent_at FROM messages m
+  const latestOurs = ids.length ? Object.fromEntries((await P.db().prepare(`
+    SELECT DISTINCT ON (t.deal_id) t.deal_id, m.body, m.snippet, m.sent_at FROM messages m
     JOIN threads t ON t.id = m.thread_id
     WHERE t.deal_id IN (${ids.map(()=>'?').join(',')})
       AND m.from_us = 1
-      AND m.id IN (SELECT id FROM messages WHERE thread_id=t.id AND from_us=1
-                   ORDER BY sent_at DESC LIMIT 1)
-    GROUP BY t.deal_id`).all(...ids).map(r => [r.deal_id, r])) : {};
+    ORDER BY t.deal_id, m.sent_at DESC`).all(...ids)).map(r => [r.deal_id, r])) : {};
 
   // Helper: find HIGHEST $ amount in text (our pitched rate is typically the
   // biggest number we mentioned — beats counter offers and small references).
@@ -3125,7 +3125,7 @@ route('GET', '/api/rate-pitched', async (req, res, { url }) => {
   // Add fit score to each — Riley needs to know at-a-glance "is this worth pushing"
   for (const d of enriched) {
     try {
-      const fit = computeFitScore({ deal: d, db: P.db() });
+      const fit = await computeFitScore({ deal: d, db: P.db() });
       d.fit_score = fit.score;
       d.fit_verdict = fit.verdict;
       d.fit_reasons = fit.reasons;
@@ -3164,7 +3164,7 @@ route('GET', '/api/inbox', async (req, res, { url }) => {
 
   // DEDUPE: one row per deal. Window function picks the most-recently-active
   // thread per deal so the "Velo has 2 threads → shows twice" bug is gone.
-  const rows = P.db().prepare(`
+  const rows = await P.db().prepare(`
     WITH ranked AS (
       SELECT t.*,
              ROW_NUMBER() OVER (PARTITION BY t.deal_id
@@ -3203,7 +3203,7 @@ route('GET', '/api/inbox', async (req, res, { url }) => {
       try { await pullSingleThread(P.db(), r.thread_id); } catch {}
     }));
     // Re-fetch the rows we just refreshed
-    const refreshed = P.db().prepare(`
+    const refreshed = await P.db().prepare(`
       SELECT m.id AS msg_id, m.sender, m.body, m.snippet, m.thread_id
       FROM messages m WHERE m.thread_id IN (${emptyEmailThreads.map(()=>'?').join(',')})
         AND m.from_us = 0
@@ -3285,18 +3285,18 @@ route('GET', '/api/inbox', async (req, res, { url }) => {
 // Riley cooks + edits + sends in one shot.
 route('POST', '/api/deals/([^/]+)/draft-and-send', async (req, res, { match }) => {
   const dealId = match[1];
-  const deal = P.data.getDeal(dealId);
+  const deal = (await P.data.getDeal(dealId));
   if (!deal) return json(res, { ok:false, reason:'deal not found' }, 404);
   if (!hasGmailToken()) return json(res, { ok:false, reason:'Gmail not connected' });
   const body = JSON.parse((await readBody(req)) || '{}');
   if (!body.body) return json(res, { ok:false, reason:'body required' }, 400);
 
   // Find the latest brand thread for this deal (skip Google Doc / noreply senders)
-  const thread = P.db().prepare(`SELECT id, last_message_at FROM threads
+  const thread = await P.db().prepare(`SELECT id, last_message_at FROM threads
     WHERE deal_id=? AND channel='email' ORDER BY last_message_at DESC LIMIT 1`).get(dealId);
   if (!thread) return json(res, { ok:false, reason:'no email thread found' });
   // Latest inbound message (to reply to)
-  const last = P.db().prepare(`SELECT id, sender FROM messages
+  const last = await P.db().prepare(`SELECT id, sender FROM messages
     WHERE thread_id=? AND from_us=0 ORDER BY sent_at DESC LIMIT 1`).get(thread.id);
   if (!last) return json(res, { ok:false, reason:'no inbound message to reply to' });
 
@@ -3308,12 +3308,12 @@ route('POST', '/api/deals/([^/]+)/draft-and-send', async (req, res, { match }) =
       subject: null,  // sendThreadedReply pulls subject from the original message
       body: body.body,
     });
-    P.data.log({ who:'riley', action:'quick_reply_sent', deal_id: dealId,
-      summary: `→ ${sendRes.to || deal.contact_email}`, meta: { gmail_message_id: sendRes.id }});
+    (await P.data.log({ who:'riley', action:'quick_reply_sent', deal_id: dealId,
+      summary: `→ ${sendRes.to || deal.contact_email}`, meta: { gmail_message_id: sendRes.id }}));
     // Flip ball back to brand
-    P.db().prepare(`UPDATE deals SET ball_in_court='them', last_activity_at=datetime('now'),
+    await P.db().prepare(`UPDATE deals SET ball_in_court='them', last_activity_at=datetime('now'),
       last_activity_by='us' WHERE id=?`).run(dealId);
-    P.db().prepare(`UPDATE threads SET ball_in_court='them', last_message_at=datetime('now'),
+    await P.db().prepare(`UPDATE threads SET ball_in_court='them', last_message_at=datetime('now'),
       last_message_by='us' WHERE id=?`).run(thread.id);
     // Backfill the just-sent message so the conversation view shows it
     // immediately — otherwise Riley has to wait for the next Gmail sync.
@@ -3322,11 +3322,11 @@ route('POST', '/api/deals/([^/]+)/draft-and-send', async (req, res, { match }) =
     // AI summary cache + queue a lifecycle audit so the deal pill re-renders
     // with the new state on next view.
     try {
-      P.db().prepare(`UPDATE deals SET ai_summary_for = NULL WHERE id = ?`).run(dealId);
+      await P.db().prepare(`UPDATE deals SET ai_summary_for = NULL WHERE id = ?`).run(dealId);
       const apiKey = process.env.OPENAI_API_KEY;
       if (apiKey && P.cfg('ai_enabled','false') === 'true') {
         const { queueAudit } = await import('./engines/lifecycle_audit.js');
-        const dealRow = P.db().prepare(`SELECT * FROM deals WHERE id = ?`).get(dealId);
+        const dealRow = await P.db().prepare(`SELECT * FROM deals WHERE id = ?`).get(dealId);
         if (dealRow) queueAudit({ db: P.db(), deal: dealRow, apiKey, spend: P.spend });
       }
     } catch {}
@@ -3348,13 +3348,13 @@ route('POST', '/api/inbox/([^/]+)/cook', async (req, res, { match }) => {
   if (!apiKey || P.cfg('ai_enabled','false') !== 'true')
     return json(res, { ok:false, reason:'AI not enabled' }, 400);
   // Pull thread + deal + recent messages
-  const t = P.db().prepare(`SELECT t.*, d.id AS d_id, d.brand, d.creator_id, d.fee_cents,
+  const t = await P.db().prepare(`SELECT t.*, d.id AS d_id, d.brand, d.creator_id, d.fee_cents,
     d.funnel_stage, d.raw_stage, d.ai_summary, d.next_action,
     d.posting_date, d.exclusivity_days, d.usage_rights, d.primary_channel
     FROM threads t LEFT JOIN deals d ON d.id=t.deal_id WHERE t.id=?`).get(thread_id);
   if (!t) return json(res, { ok:false, reason:'thread not found' }, 404);
-  const msgs = P.db().prepare(`SELECT sender, from_us, sent_at, body, snippet
-    FROM messages WHERE thread_id=? ORDER BY sent_at DESC LIMIT 8`).all(thread_id).reverse();
+  const msgs = (await P.db().prepare(`SELECT sender, from_us, sent_at, body, snippet
+    FROM messages WHERE thread_id=? ORDER BY sent_at DESC LIMIT 8`).all(thread_id)).reverse();
   const lastBrand = [...msgs].reverse().find(m => !m.from_us);
 
   const creator = t.creator_id || null;
@@ -3425,9 +3425,9 @@ Write Riley's reply now.`;
     const body = data.choices?.[0]?.message?.content?.trim() || '';
     const cost = Math.round((data.usage?.prompt_tokens||0) * 0.00025)
                + Math.round((data.usage?.completion_tokens||0) * 0.001);
-    P.spend.record({ provider:'openai', model:'gpt-4o', operation:'inbox_first_reply',
+    (await P.spend.record({ provider:'openai', model:'gpt-4o', operation:'inbox_first_reply',
       prompt_tokens: data.usage?.prompt_tokens || 0, completion_tokens: data.usage?.completion_tokens || 0,
-      est_cost_cents: cost });
+      est_cost_cents: cost }));
     json(res, { ok:true, body, channel: t.channel });
   } catch (e) {
     json(res, { ok:false, reason: e.message }, 500);
@@ -3444,7 +3444,7 @@ Write Riley's reply now.`;
 route('GET', '/api/inbox-pitches', async (req, res, { url }) => {
   const force = url.searchParams.get('force') === '1';
   // SQLite doesn't ship REGEXP — use a bunch of LIKE OR's instead.
-  const candidates = P.db().prepare(`
+  const candidates = await P.db().prepare(`
       SELECT t.id AS thread_id, t.subject, t.last_message_at, t.last_message_by,
              t.pitch_creator, t.pitch_category, t.pitch_classified_at,
              (SELECT m.sender FROM messages m WHERE m.thread_id=t.id AND m.from_us=0 ORDER BY m.sent_at DESC LIMIT 1) AS sender,
@@ -3489,12 +3489,14 @@ route('GET', '/api/inbox-pitches', async (req, res, { url }) => {
     const bodyClean = (r.body || r.snippet || '').replace(/\s+/g,'').trim();
     const senderClean = (r.sender || '').trim();
     if (!bodyClean && !senderClean) {
-      P.db().prepare(`UPDATE threads SET pitch_dismissed_at=datetime('now') WHERE id=?`).run(r.thread_id);
       emptyDismissed.push(r.thread_id);
       return false;
     }
     return true;
   });
+  for (const tid of emptyDismissed) {
+    await P.db().prepare(`UPDATE threads SET pitch_dismissed_at=datetime('now') WHERE id=?`).run(tid);
+  }
 
   // ---- ENGINE FIX 1.5: pull full Gmail thread + auto-promote active conversations
   // Riley's prior replies might live in Gmail but not in our DB yet (older
@@ -3511,37 +3513,42 @@ route('GET', '/api/inbox-pitches', async (req, res, { url }) => {
       try { await pullSingleThread(P.db(), r.thread_id); } catch {}
     }));
     // FIRST: match against existing brands by subject. If hit, link + skip.
-    const allDealsForLink = P.db().prepare(`SELECT id, brand FROM deals WHERE state != 'lost' AND brand IS NOT NULL`).all();
+    const allDealsForLink = await P.db().prepare(`SELECT id, brand FROM deals WHERE state != 'lost' AND brand IS NOT NULL`).all();
     const brandIndex = allDealsForLink.map(d => ({
       id: d.id,
       norm: (d.brand || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(),
     })).filter(x => x.norm.length >= 5);
-    filtered = filtered.filter(r => {
-      const subjNorm = (r.subject || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
-      if (!subjNorm) return true;
-      let match = null;
-      for (const d of brandIndex) {
-        const pattern = new RegExp(`\\b${d.norm.replace(/\s+/g,'\\s+')}\\b`, 'i');
-        if (pattern.test(subjNorm) && (!match || d.norm.length > match.norm.length)) match = d;
+    {
+      const _kept = [];
+      for (const r of filtered) {
+        const subjNorm = (r.subject || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+        if (!subjNorm) { _kept.push(r); continue; }
+        let match = null;
+        for (const d of brandIndex) {
+          const pattern = new RegExp(`\\b${d.norm.replace(/\s+/g,'\\s+')}\\b`, 'i');
+          if (pattern.test(subjNorm) && (!match || d.norm.length > match.norm.length)) match = d;
+        }
+        if (match) {
+          await P.db().prepare(`UPDATE threads SET deal_id=?, pitch_dismissed_at=NULL WHERE id=?`).run(match.id, r.thread_id);
+          continue;
+        }
+        _kept.push(r);
       }
-      if (match) {
-        P.db().prepare(`UPDATE threads SET deal_id=?, pitch_dismissed_at=NULL WHERE id=?`).run(match.id, r.thread_id);
-        return false;
-      }
-      return true;
-    });
+      filtered = _kept;
+    }
     // SECOND: any thread Riley already replied to but we couldn't subject-link
     // → auto-create a deal.
-    const ongoingIds = filtered.length ? P.db().prepare(`
+    const ongoingIds = filtered.length ? (await P.db().prepare(`
       SELECT thread_id FROM messages
       WHERE thread_id IN (${filtered.map(()=>'?').join(',')})
         AND from_us = 1
-      GROUP BY thread_id`).all(...filtered.map(r => r.thread_id)).map(x => x.thread_id) : [];
+      GROUP BY thread_id`).all(...filtered.map(r => r.thread_id))).map(x => x.thread_id) : [];
     if (ongoingIds.length) {
       const ongoingSet = new Set(ongoingIds);
       const promotedAuto = [];
-      filtered = filtered.filter(r => {
-        if (!ongoingSet.has(r.thread_id)) return true;
+      const _kept = [];
+      for (const r of filtered) {
+        if (!ongoingSet.has(r.thread_id)) { _kept.push(r); continue; }
         // Active back-and-forth → auto-create a deal so this conversation
         // doesn't fall into a black hole.
         // Brand-name heuristic: agency/manager domains often hide the real
@@ -3572,9 +3579,9 @@ route('GET', '/api/inbox-pitches', async (req, res, { url }) => {
         const creator = r.pitch_creator && ['cooper','charlie'].includes(r.pitch_creator) ? r.pitch_creator : 'cooper';
         const dealId = `${slug}-${creator}`;
         try {
-          const exists = P.db().prepare(`SELECT id FROM deals WHERE id=?`).get(dealId);
+          const exists = await P.db().prepare(`SELECT id FROM deals WHERE id=?`).get(dealId);
           if (!exists) {
-            P.db().prepare(`INSERT INTO deals (id, brand, brand_key, creator_id, funnel_stage, state,
+            await P.db().prepare(`INSERT INTO deals (id, brand, brand_key, creator_id, funnel_stage, state,
               raw_stage, priority, ball_in_court, primary_channel, last_activity_at,
               last_activity_by, next_action, next_action_detail, thread_id, category)
               VALUES (?, ?, ?, ?, 'conversation', 'open', 'awaiting_brand', 'medium', 'us', 'email',
@@ -3586,13 +3593,14 @@ route('GET', '/api/inbox-pitches', async (req, res, { url }) => {
             promotedAuto.push({ deal: dealId, thread: r.thread_id });
           }
           // Link the thread to the deal regardless
-          P.db().prepare(`UPDATE threads SET deal_id=?, pitch_dismissed_at=NULL WHERE id=?`).run(dealId, r.thread_id);
+          await P.db().prepare(`UPDATE threads SET deal_id=?, pitch_dismissed_at=NULL WHERE id=?`).run(dealId, r.thread_id);
         } catch (e) {
           // Fallback: dismiss so it doesn't keep appearing as a pitch
-          P.db().prepare(`UPDATE threads SET pitch_dismissed_at=datetime('now') WHERE id=?`).run(r.thread_id);
+          await P.db().prepare(`UPDATE threads SET pitch_dismissed_at=datetime('now') WHERE id=?`).run(r.thread_id);
         }
-        return false; // drop from pitches list
-      });
+        // drop from pitches list (do not push to _kept)
+      }
+      filtered = _kept;
     }
   }
 
@@ -3601,33 +3609,37 @@ route('GET', '/api/inbox-pitches', async (req, res, { url }) => {
   // ZenBusiness Velo AI Campaign x @cooper.simson"), the email isn't a new
   // pitch — it's a continuation. Link the thread to that deal so it shows up
   // in the deal's conversation view instead of cluttering "New pitches".
-  const allDeals = P.db().prepare(`SELECT id, brand FROM deals WHERE state != 'lost' AND brand IS NOT NULL`).all();
+  const allDeals = await P.db().prepare(`SELECT id, brand FROM deals WHERE state != 'lost' AND brand IS NOT NULL`).all();
   const dealBrandIndex = allDeals.map(d => ({
     id: d.id,
     // Normalize: lowercase, strip non-alphanumeric → distinctive token
     norm: (d.brand || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(),
   })).filter(x => x.norm.length >= 5); // skip 1-2 letter brands to avoid false hits
   const linkedToExisting = [];
-  filtered = filtered.filter(r => {
-    const subjNorm = (r.subject || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
-    if (!subjNorm) return true;
-    // Find the longest brand token contained in the subject (longest = most distinctive)
-    let match = null;
-    for (const d of dealBrandIndex) {
-      // Tokens must be word-bounded: "velo" in "develop" shouldn't match.
-      // Build a regex: \b<norm>\b but treat spaces in norm as flexible.
-      const pattern = new RegExp(`\\b${d.norm.replace(/\s+/g,'\\s+')}\\b`, 'i');
-      if (pattern.test(subjNorm) && (!match || d.norm.length > match.norm.length)) {
-        match = d;
+  {
+    const _kept = [];
+    for (const r of filtered) {
+      const subjNorm = (r.subject || '').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim();
+      if (!subjNorm) { _kept.push(r); continue; }
+      // Find the longest brand token contained in the subject (longest = most distinctive)
+      let match = null;
+      for (const d of dealBrandIndex) {
+        // Tokens must be word-bounded: "velo" in "develop" shouldn't match.
+        // Build a regex: \b<norm>\b but treat spaces in norm as flexible.
+        const pattern = new RegExp(`\\b${d.norm.replace(/\s+/g,'\\s+')}\\b`, 'i');
+        if (pattern.test(subjNorm) && (!match || d.norm.length > match.norm.length)) {
+          match = d;
+        }
       }
+      if (match) {
+        await P.db().prepare(`UPDATE threads SET deal_id=? WHERE id=?`).run(match.id, r.thread_id);
+        linkedToExisting.push({ thread: r.thread_id, deal: match.id });
+        continue;
+      }
+      _kept.push(r);
     }
-    if (match) {
-      P.db().prepare(`UPDATE threads SET deal_id=? WHERE id=?`).run(match.id, r.thread_id);
-      linkedToExisting.push({ thread: r.thread_id, deal: match.id });
-      return false;
-    }
-    return true;
-  });
+    filtered = _kept;
+  }
 
   // AI-classify any pitches that don't yet have a creator guess
   const apiKey = process.env.OPENAI_API_KEY;
@@ -3642,7 +3654,7 @@ route('GET', '/api/inbox-pitches', async (req, res, { url }) => {
           apiKey,
         });
         if (result?.creator) {
-          P.db().prepare(`UPDATE threads SET pitch_creator=?, pitch_category=?, pitch_classified_at=datetime('now') WHERE id=?`)
+          await P.db().prepare(`UPDATE threads SET pitch_creator=?, pitch_category=?, pitch_classified_at=datetime('now') WHERE id=?`)
             .run(result.creator, result.category || null, r.thread_id);
           r.pitch_creator = result.creator;
           r.pitch_category = result.category;
@@ -3656,13 +3668,17 @@ route('GET', '/api/inbox-pitches', async (req, res, { url }) => {
   // doesn't manage (Beth, Amie, etc.), dismiss it so it never reappears.
   // Cooper + Charlie + unknown still flow through normally.
   const MANAGED = new Set(['cooper','charlie','unknown']);
-  filtered = filtered.filter(r => {
-    if (r.pitch_creator && !MANAGED.has(r.pitch_creator)) {
-      P.db().prepare(`UPDATE threads SET pitch_dismissed_at=datetime('now') WHERE id=?`).run(r.thread_id);
-      return false;
+  {
+    const _kept = [];
+    for (const r of filtered) {
+      if (r.pitch_creator && !MANAGED.has(r.pitch_creator)) {
+        await P.db().prepare(`UPDATE threads SET pitch_dismissed_at=datetime('now') WHERE id=?`).run(r.thread_id);
+        continue;
+      }
+      _kept.push(r);
     }
-    return true;
-  });
+    filtered = _kept;
+  }
 
   // Strip quoted reply chains from bodies for display
   json(res, filtered.map(r => {
@@ -3727,7 +3743,7 @@ ${body || '(no body)'}`;
 // Dismiss an inbox pitch — marks the thread so it stops appearing
 route('POST', '/api/inbox-pitches/([^/]+)/dismiss', async (req, res, { match }) => {
   const tid = decodeURIComponent(match[1]);
-  P.db().prepare(`UPDATE threads SET pitch_dismissed_at=datetime('now') WHERE id=?`).run(tid);
+  await P.db().prepare(`UPDATE threads SET pitch_dismissed_at=datetime('now') WHERE id=?`).run(tid);
   json(res, { ok:true });
 });
 
@@ -3740,9 +3756,9 @@ route('POST', '/api/inbox-pitches/([^/]+)/promote', async (req, res, { match }) 
   if (!body.brand) return json(res, { ok:false, reason:'brand required' }, 400);
   const slug = body.brand.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40);
   const dealId = `${slug}-${body.creator_id}`;
-  const existing = P.db().prepare(`SELECT id FROM deals WHERE id=?`).get(dealId);
+  const existing = await P.db().prepare(`SELECT id FROM deals WHERE id=?`).get(dealId);
   if (!existing) {
-    P.db().prepare(`INSERT INTO deals (id, brand, brand_key, creator_id, funnel_stage, state,
+    await P.db().prepare(`INSERT INTO deals (id, brand, brand_key, creator_id, funnel_stage, state,
       raw_stage, priority, ball_in_court, primary_channel, last_activity_at, last_activity_by, next_action,
       thread_id, category)
       VALUES (?, ?, ?, ?, 'conversation', 'open', 'awaiting_brand', 'medium', 'us', 'email',
@@ -3750,10 +3766,10 @@ route('POST', '/api/inbox-pitches/([^/]+)/promote', async (req, res, { match }) 
       .run(dealId, body.brand, body.brand, body.creator_id, tid, body.category || null);
   }
   // Link the thread to the new deal
-  P.db().prepare(`UPDATE threads SET deal_id=? WHERE id=?`).run(dealId, tid);
-  P.data.log({ who:'riley', action:'pitch_promoted', deal_id: dealId, summary:`from thread ${tid}` });
+  await P.db().prepare(`UPDATE threads SET deal_id=? WHERE id=?`).run(dealId, tid);
+  (await P.data.log({ who:'riley', action:'pitch_promoted', deal_id: dealId, summary:`from thread ${tid}` }));
   // Banner notification
-  P.db().prepare(`INSERT INTO notifications (kind, deal_id, title, body) VALUES (?, ?, ?, ?)`)
+  await P.db().prepare(`INSERT INTO notifications (kind, deal_id, title, body) VALUES (?, ?, ?, ?)`)
     .run('lead_promoted', dealId, `📨 New deal: ${body.brand}`, `Created from inbox pitch — assigned to ${body.creator_id}.`);
   json(res, { ok:true, deal_id: dealId });
 });
@@ -3766,14 +3782,14 @@ route('GET', '/api/leads', async (req, res, { url }) => {
   const creator = url.searchParams.get('creator') || null;
   // Orphan contracts: no deal_id, fee >= $300 from AI extraction, not dismissed,
   // last 14 days. brand pulled from AI-extracted `brand_party` in the JSON.
-  const rawContracts = P.db().prepare(`SELECT * FROM contracts
+  const rawContracts = await P.db().prepare(`SELECT * FROM contracts
     WHERE deal_id IS NULL AND dismissed_at IS NULL
       AND fee_cents IS NOT NULL AND fee_cents >= 30000
       AND datetime(created_at) >= datetime('now', '-14 days')
     ORDER BY created_at DESC LIMIT 30`).all();
   // Build a normalized brand index for de-orphaning leads whose brand_party
   // fuzzy-matches an existing deal (catches "PlayOS, Inc." → Sintra.ai).
-  const allDeals = P.data.listDeals({ limit: 2000 });
+  const allDeals = (await P.data.listDeals({ limit: 2000 }));
   const norm = s => (s || '').toLowerCase()
     .replace(/\.(ai|com|io|co|app|inc)\b/g,'')
     .replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
@@ -3809,7 +3825,7 @@ route('GET', '/api/leads', async (req, res, { url }) => {
     };
   }).filter(l => !l._matched_existing);
   // Orphan pending e-sign envelopes: kind=esign_pending, deal_id IS NULL, not dismissed
-  const rawEsign = P.db().prepare(`SELECT * FROM notifications
+  const rawEsign = await P.db().prepare(`SELECT * FROM notifications
     WHERE kind='esign_pending' AND deal_id IS NULL
       AND dismissed_at IS NULL AND undone_at IS NULL
       AND datetime(created_at) >= datetime('now', '-14 days')
@@ -3844,7 +3860,7 @@ route('POST', '/api/leads/(contract|esign)/([^/]+)/clash-check', async (req, res
   let category = null, postingDate = null, brand = body.brand;
   let exclDays = null;
   if (kind === 'contract') {
-    const c = P.db().prepare('SELECT * FROM contracts WHERE id=?').get(id);
+    const c = await P.db().prepare('SELECT * FROM contracts WHERE id=?').get(id);
     if (c) {
       try {
         const ex = JSON.parse(c.extracted || '{}');
@@ -3874,7 +3890,7 @@ route('POST', '/api/leads/(contract|esign)/([^/]+)/clash-check', async (req, res
   };
 
   const { computeClashes } = await import('./engines/clash.js');
-  const allDeals = P.data.listDeals({ creator, limit: 2000 });
+  const allDeals = (await P.data.listDeals({ creator, limit: 2000 }));
   // Also flag brand-already-have-a-deal-with (any state)
   const norm = s => (s || '').toLowerCase().replace(/\.(ai|com|io|co|app|inc)\b/g,'').replace(/[^a-z0-9 ]/g,'').trim();
   const brandKey = norm(brand);
@@ -3915,9 +3931,9 @@ function guessCategoryFromBrand(s) {
 route('POST', '/api/leads/(contract|esign)/([^/]+)/dismiss', async (req, res, { match }) => {
   const [, kind, id] = match;
   if (kind === 'contract') {
-    P.db().prepare(`UPDATE contracts SET dismissed_at=datetime('now') WHERE id=?`).run(id);
+    await P.db().prepare(`UPDATE contracts SET dismissed_at=datetime('now') WHERE id=?`).run(id);
   } else {
-    P.db().prepare(`UPDATE notifications SET dismissed_at=datetime('now') WHERE id=?`).run(Number(id));
+    await P.db().prepare(`UPDATE notifications SET dismissed_at=datetime('now') WHERE id=?`).run(Number(id));
   }
   json(res, { ok:true });
 });
@@ -3935,12 +3951,12 @@ route('POST', '/api/leads/(contract|esign)/([^/]+)/promote', async (req, res, { 
   const slug = body.brand.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40);
   const dealId = `${slug}-${body.creator_id}`;
   // If a deal with that id already exists, just link to it
-  let deal = P.db().prepare('SELECT * FROM deals WHERE id=?').get(dealId);
+  let deal = await P.db().prepare('SELECT * FROM deals WHERE id=?').get(dealId);
   if (!deal) {
     // Pull contract details if this is a contract lead
     let postingDate = null, usageRights = null, exclusivityDays = null;
     if (kind === 'contract') {
-      const c = P.db().prepare('SELECT * FROM contracts WHERE id=?').get(id);
+      const c = await P.db().prepare('SELECT * FROM contracts WHERE id=?').get(id);
       if (c) {
         try {
           const ex = JSON.parse(c.extracted || '{}');
@@ -3950,24 +3966,24 @@ route('POST', '/api/leads/(contract|esign)/([^/]+)/promote', async (req, res, { 
         } catch {}
       }
     }
-    P.db().prepare(`INSERT INTO deals (id, brand, brand_key, creator_id, funnel_stage, state,
+    await P.db().prepare(`INSERT INTO deals (id, brand, brand_key, creator_id, funnel_stage, state,
       raw_stage, priority, ball_in_court, fee_cents, posting_date, usage_rights,
       exclusivity_days, primary_channel, last_activity_at, last_activity_by, next_action)
       VALUES (?, ?, ?, ?, 'in_works', 'open', 'contract_received', 'high', 'us', ?, ?, ?, ?, 'email',
         datetime('now'), 'them', 'Review terms, return signed')`)
       .run(dealId, body.brand, body.brand, body.creator_id,
            body.fee_cents || null, postingDate, usageRights, exclusivityDays);
-    deal = P.db().prepare('SELECT * FROM deals WHERE id=?').get(dealId);
+    deal = await P.db().prepare('SELECT * FROM deals WHERE id=?').get(dealId);
   }
   // Link the contract / mark notification as resolved
   if (kind === 'contract') {
-    P.db().prepare(`UPDATE contracts SET deal_id=? WHERE id=?`).run(dealId, id);
+    await P.db().prepare(`UPDATE contracts SET deal_id=? WHERE id=?`).run(dealId, id);
   } else {
-    P.db().prepare(`UPDATE notifications SET deal_id=?, dismissed_at=datetime('now') WHERE id=?`)
+    await P.db().prepare(`UPDATE notifications SET deal_id=?, dismissed_at=datetime('now') WHERE id=?`)
       .run(dealId, Number(id));
   }
   // Drop a banner so Riley sees the new deal
-  P.db().prepare(`INSERT INTO notifications (kind, deal_id, title, body)
+  await P.db().prepare(`INSERT INTO notifications (kind, deal_id, title, body)
     VALUES ('lead_promoted', ?, ?, ?)`)
     .run(dealId,
          `📥 New deal: ${body.brand}`,
@@ -3977,20 +3993,20 @@ route('POST', '/api/leads/(contract|esign)/([^/]+)/promote', async (req, res, { 
 
 // ---- Notifications (auto-promote banner + undo) -----------------------------
 route('GET', '/api/notifications', async (req, res) => {
-  const rows = listActiveNotifications({ db: P.db(), hours: 48 });
+  const rows = await listActiveNotifications({ db: P.db(), hours: 48 });
   // Hydrate with brand for the banner display
   const ids = rows.map(r => r.deal_id);
   const brands = ids.length
-    ? Object.fromEntries(P.db().prepare(`SELECT id, brand, creator_id, fee_cents FROM deals
-        WHERE id IN (${ids.map(()=>'?').join(',')})`).all(...ids).map(r => [r.id, r]))
+    ? Object.fromEntries((await P.db().prepare(`SELECT id, brand, creator_id, fee_cents FROM deals
+        WHERE id IN (${ids.map(()=>'?').join(',')})`).all(...ids)).map(r => [r.id, r]))
     : {};
   json(res, rows.map(r => ({ ...r, deal: brands[r.deal_id] || null })));
 });
 route('POST', '/api/notifications/([0-9]+)/dismiss', async (req, res, { match }) => {
-  json(res, dismissNotification({ db: P.db(), id: Number(match[1]) }));
+  json(res, await dismissNotification({ db: P.db(), id: Number(match[1]) }));
 });
 route('POST', '/api/notifications/([0-9]+)/undo', async (req, res, { match }) => {
-  json(res, undoPromotion({ db: P.db(), notificationId: Number(match[1]) }));
+  json(res, await undoPromotion({ db: P.db(), notificationId: Number(match[1]) }));
 });
 
 // ---- Intent preview + commit helpers ----------------------------------------
@@ -4036,15 +4052,15 @@ async function commitIntent(intent) {
   switch (intent.intent) {
     case 'log_payment':
       if (!intent.deal_id || !intent.amount_cents) return { ok:false, reason:'need deal + amount' };
-      return P.data.logPayment({ id:`pay_${Date.now()}`, deal_id:intent.deal_id, amount_cents:intent.amount_cents });
+      return (await P.data.logPayment({ id:`pay_${Date.now()}`, deal_id:intent.deal_id, amount_cents:intent.amount_cents }));
     case 'reminder':
-      return P.data.addReminder({ id:`rem_${Date.now()}`, text:intent.text, due_at:intent.due_at, source:'capture' });
+      return (await P.data.addReminder({ id:`rem_${Date.now()}`, text:intent.text, due_at:intent.due_at, source:'capture' }));
     case 'flag_deal':
-      P.data.log({ who:'riley', action:'flag_added', deal_id: intent.deal_id, summary: intent.note });
+      (await P.data.log({ who:'riley', action:'flag_added', deal_id: intent.deal_id, summary: intent.note }));
       return { ok:true, kind:'flag_added' };
     case 'send_message': {
       if (!intent.deal_id) return { ok:false, reason:'no matching deal to send on' };
-      const deal = P.data.getDeal(intent.deal_id);
+      const deal = (await P.data.getDeal(intent.deal_id));
       if (!deal) return { ok:false, reason:'deal not found' };
       const instruction = intent.message || '';
       // Detect channel from the wording itself (overrides classifier guess).
@@ -4053,32 +4069,32 @@ async function commitIntent(intent) {
       const channel = wantsWA && !wantsEmail ? 'whatsapp' : 'email';
       if (channel === 'whatsapp' && deal.creator_id) {
         // Ping the creator via WhatsApp — save as draft so the WA modal can open it.
-        return P.data.saveDraft({
+        return (await P.data.saveDraft({
           id: `dr_${Date.now()}_${randomUUID().slice(0,6)}`,
           deal_id: intent.deal_id, channel: 'whatsapp',
           body: instruction, status: 'ready', generated_by: 'voice-capture',
           rationale: 'Voice-capture WA message',
-        });
+        }));
       }
       // EMAIL: cook a proper draft via the AI provider with Riley's instruction baked in.
       // Use pickReplyTarget so we never land in a Google Docs notification thread.
-      const target = pickReplyTarget(intent.deal_id);
+      const target = await pickReplyTarget(intent.deal_id);
       const latestMsg = target
-        ? P.db().prepare(`SELECT * FROM messages WHERE id=?`).get(target.msg_id)
-        : P.db().prepare(`SELECT * FROM messages
+        ? await P.db().prepare(`SELECT * FROM messages WHERE id=?`).get(target.msg_id)
+        : await P.db().prepare(`SELECT * FROM messages
             WHERE thread_id IN (SELECT id FROM threads WHERE deal_id=?) AND from_us=0
             ORDER BY sent_at DESC LIMIT 1`).get(intent.deal_id);
       try {
         const replyThreadId = target?.thread_id || deal.thread_id;
-        const threadHistory = replyThreadId ? P.db().prepare(`
+        const threadHistory = replyThreadId ? (await P.db().prepare(`
           SELECT id, sender, from_us, sent_at, snippet, body, channel
           FROM messages WHERE thread_id = ?
-          ORDER BY sent_at DESC LIMIT 20`).all(replyThreadId).reverse() : [];
-        const waHistory = P.db().prepare(`
+          ORDER BY sent_at DESC LIMIT 20`).all(replyThreadId)).reverse() : [];
+        const waHistory = (await P.db().prepare(`
           SELECT m.id, m.sender, m.from_us, m.sent_at, m.snippet, m.body, m.channel
           FROM messages m JOIN threads t ON t.id = m.thread_id
           WHERE t.deal_id = ? AND m.channel = 'whatsapp'
-          ORDER BY m.sent_at DESC LIMIT 20`).all(intent.deal_id).reverse();
+          ORDER BY m.sent_at DESC LIMIT 20`).all(intent.deal_id)).reverse();
         const composed = await P.draft.draft({
           deal, latestMessage: latestMsg,
           mode: 'custom_instruction',
@@ -4086,16 +4102,16 @@ async function commitIntent(intent) {
           threadHistory, waHistory,
         });
         const draftId = `dr_${Date.now()}_${randomUUID().slice(0,6)}`;
-        P.data.saveDraft({
+        (await P.data.saveDraft({
           id: draftId, deal_id: intent.deal_id, channel: 'email',
           thread_id: target?.thread_id || deal.thread_id,
           reply_to_msg_id: target?.msg_id || latestMsg?.id || deal.latest_msg_id,
           subject: composed.subject, body: composed.body,
           status: 'ready', rationale: composed.rationale,
           generated_by: composed.generated_by,
-        });
-        P.data.log({ who:'riley', action:'voice_email_draft', deal_id:intent.deal_id,
-          summary:`Cooked email per instruction: ${instruction.slice(0,140)}` });
+        }));
+        (await P.data.log({ who:'riley', action:'voice_email_draft', deal_id:intent.deal_id,
+          summary:`Cooked email per instruction: ${instruction.slice(0,140)}` }));
         return { ok:true, kind:'email_draft_ready', draft_id: draftId, channel:'email',
           deal_id: intent.deal_id, brand: deal.brand };
       } catch (e) {
@@ -4103,7 +4119,7 @@ async function commitIntent(intent) {
       }
     }
     default:
-      P.data.log({ who:'riley', action:'note', summary: intent.text || JSON.stringify(intent) });
+      (await P.data.log({ who:'riley', action:'note', summary: intent.text || JSON.stringify(intent) }));
       return { ok:true };
   }
 }
@@ -4168,13 +4184,18 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
+// Async startup: initialize the provider registry (config cache + idempotent
+// migrations) BEFORE the server starts serving requests. ESM top-level await.
+await ensureInit();
+P.reload();
+
+server.listen(PORT, async () => {
   console.log(`✓ Triibe Platform listening on http://localhost:${PORT}`);
   console.log(`  data: sqlite (~/triibe-platform/data/triibe.db)`);
-  console.log(`  ai:   ${P.spend.status().enabled ? 'ENABLED' : 'OFF (kill switch)'}`);
+  console.log(`  ai:   ${(await P.spend.status()).enabled ? 'ENABLED' : 'OFF (kill switch)'}`);
   // Reconcile thread state on boot — heals any drift accumulated since last run
   try {
-    const r = reconcileThreadStates({ db: P.db() });
+    const r = await reconcileThreadStates({ db: P.db() });
     if (r.threads_updated || r.deals_updated) {
       console.log(`  reconcile: ${r.threads_updated} threads + ${r.deals_updated} deals refreshed from messages`);
     }

@@ -101,7 +101,7 @@ export async function auditDealLifecycle({ db, deal, apiKey, spend }) {
   if (gate && !gate.ok) return null;
 
   // Pull full conversation for this deal (all threads, all channels)
-  const rows = db.prepare(`
+  const rows = await db.prepare(`
     SELECT m.sent_at, m.channel, m.sender, m.from_us, m.body, m.snippet
     FROM messages m
     JOIN threads t ON t.id = m.thread_id
@@ -131,7 +131,7 @@ export async function auditDealLifecycle({ db, deal, apiKey, spend }) {
       const since = new Date(Date.now() - sinceDays * 86400_000).toISOString();
       const likeClauses = tokens.map(() => '(LOWER(m.body) LIKE ? OR LOWER(m.snippet) LIKE ?)').join(' OR ');
       const likeArgs = tokens.flatMap(t => [`%${t}%`, `%${t}%`]);
-      creatorRows = db.prepare(`
+      creatorRows = await db.prepare(`
         SELECT m.sent_at, m.channel, m.sender, m.from_us, m.body, m.snippet
         FROM messages m JOIN threads t ON t.id = m.thread_id
         WHERE t.channel = 'whatsapp' AND t.subject LIKE ?
@@ -264,7 +264,7 @@ Return the verdict JSON now.`;
 
   // Persist to deal record
   try {
-    db.prepare(`UPDATE deals SET lifecycle_state = ?, lifecycle_audited_at = datetime('now') WHERE id = ?`)
+    await db.prepare(`UPDATE deals SET lifecycle_state = ?, lifecycle_audited_at = datetime('now') WHERE id = ?`)
       .run(JSON.stringify(cleaned), deal.id);
   } catch (e) {
     console.warn(`[lifecycle_audit] ${deal.id} persist err:`, e.message);
@@ -275,7 +275,7 @@ Return the verdict JSON now.`;
   // bumps raw_stage to signed (state=won). Logs an Undo-able notification so
   // Riley can roll back if the AI got it wrong.
   try {
-    const r = promoteFromAuditVerdict({ db, deal, verdict: cleaned });
+    const r = await promoteFromAuditVerdict({ db, deal, verdict: cleaned });
     if (r.promoted) {
       console.log(`[lifecycle_audit] ${deal.id} auto-promoted: ${r.applied.new_raw_stage}`);
     }

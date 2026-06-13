@@ -39,13 +39,13 @@ function brandTokens(brand) {
 // Keeps tens of bytes in memory — fine.
 let lastSeenAt = null;
 
-export function tickPropagator({ db, apiKey, spend }) {
+export async function tickPropagator({ db, apiKey, spend }) {
   if (!db) return { matched: 0, reason: 'no db' };
 
   // On first tick after boot, seed from the most recent creator-chat message
   // so we don't re-process the full backlog. Subsequent ticks march forward.
   if (lastSeenAt == null) {
-    const seed = db.prepare(`SELECT MAX(m.sent_at) m
+    const seed = await db.prepare(`SELECT MAX(m.sent_at) m
       FROM messages m JOIN threads t ON t.id = m.thread_id
       WHERE t.channel='whatsapp' AND t.subject LIKE '%X TRIIBE%'`).get();
     lastSeenAt = seed?.m || new Date(Date.now() - 60_000).toISOString();
@@ -53,7 +53,7 @@ export function tickPropagator({ db, apiKey, spend }) {
   }
 
   // Fetch creator-chat messages newer than our high-water mark.
-  const rows = db.prepare(`
+  const rows = await db.prepare(`
     SELECT m.id, m.sent_at, m.body, m.snippet, m.from_us, t.subject
     FROM messages m JOIN threads t ON t.id = m.thread_id
     WHERE t.channel='whatsapp' AND t.subject LIKE '%X TRIIBE%'
@@ -64,7 +64,7 @@ export function tickPropagator({ db, apiKey, spend }) {
   if (!rows.length) return { matched: 0, reason: 'no new msgs' };
 
   // Pull active deals once per tick + memoize their tokenized brand names.
-  const deals = db.prepare(`
+  const deals = await db.prepare(`
     SELECT id, brand, creator_id, fee_cents, posting_date, funnel_stage,
            raw_stage, state, payment_terms_days
     FROM deals
@@ -98,7 +98,7 @@ export function tickPropagator({ db, apiKey, spend }) {
       // 2. Null ai_summary_for so /api/deals/:id/summary regenerates against
       //    the new context next time it's fetched.
       try {
-        db.prepare(`UPDATE deals
+        await db.prepare(`UPDATE deals
           SET last_activity_at = ?, ai_summary_for = NULL
           WHERE id = ?`).run(row.sent_at, deal.id);
       } catch (e) {
@@ -126,8 +126,8 @@ export function tickPropagator({ db, apiKey, spend }) {
 // 30s tick — short enough that creator-chat updates feel near-real-time,
 // long enough that we don't hammer the DB when nothing is happening.
 export function startPropagator({ db, apiKey, spend }) {
-  setInterval(() => {
-    try { tickPropagator({ db, apiKey, spend }); }
+  setInterval(async () => {
+    try { await tickPropagator({ db, apiKey, spend }); }
     catch (e) { console.warn('[creator_chat_propagator] tick err:', e.message); }
   }, 30_000);
   console.log('[creator_chat_propagator] started — 30s tick');

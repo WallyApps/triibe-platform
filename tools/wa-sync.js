@@ -9,10 +9,10 @@
 // new QR scan needed as long as Riley's phone still has WhatsApp Web linked.
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { openDb, initSchema } from '../db/init.js';
+import { openDb } from '../db/init.js';
 import { ingestAll } from '../server/engines/ingest.js';
 
-const BRIDGE_DIR = '/Users/rileywallack/triibe-ops/whatsapp-bridge';
+const BRIDGE_DIR = process.env.WA_BRIDGE_DIR || '/Users/rileywallack/triibe-ops/whatsapp-bridge';
 const PULL_SCRIPT = `${BRIDGE_DIR}/pull.js`;
 const INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -36,10 +36,11 @@ async function runPull() {
       setTimeout(() => { try { child.kill('SIGKILL'); } catch {} reject(new Error('pull.js timeout 90s')); }, 90_000);
     });
     const ms = Date.now() - start;
-    // Re-ingest
-    const db = openDb(); initSchema(db);
-    const stats = ingestAll(db);
-    db.close();
+    // Re-ingest. Schema is managed centrally (db/init.js / server boot); do NOT
+    // re-init or close the shared pool here — runPull also runs in-process from
+    // the server's 5-min interval, where closing the pool would break the server.
+    const db = openDb();
+    const stats = await ingestAll(db);
     console.log(`[wa-sync] ✓ pulled + ingested in ${(ms/1000).toFixed(1)}s — WA:`, stats.whatsapp);
     return { ok: true, ms, stats: stats.whatsapp };
   } catch (e) {

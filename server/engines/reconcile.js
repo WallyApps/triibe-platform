@@ -19,10 +19,10 @@
  *
  * Empty threads (no messages) are left alone — could be just-created skeletons.
  */
-export function reconcileThreadStates({ db }) {
+export async function reconcileThreadStates({ db }) {
   // Single SQL update — for every thread, set last_message_at/by/ball based on
   // the latest message row. COALESCE keeps the row alive if no messages exist.
-  const r1 = db.prepare(`
+  const r1 = await db.prepare(`
     UPDATE threads
     SET last_message_at = COALESCE(
           (SELECT m.sent_at FROM messages m
@@ -49,7 +49,7 @@ export function reconcileThreadStates({ db }) {
   // We need that diff so we can invalidate stale next_action_detail text + the
   // AI summary on flipped deals — otherwise the headline keeps saying "no
   // action needed until they respond" even after they responded.
-  const flipped = db.prepare(`
+  const flipped = await db.prepare(`
     SELECT deals.id, deals.next_action_detail, deals.last_activity_at as old_activity_at,
            t.last_message_at as new_activity_at, t.last_message_by as new_activity_by,
            (SELECT m.sender FROM messages m
@@ -67,7 +67,7 @@ export function reconcileThreadStates({ db }) {
   // Skip deals where there are competing threads with conflicting ball states
   // (rare — usually means Riley has WhatsApp + email both alive; in that case
   // keep whatever's there since the per-deal pill shows both anyway).
-  const r2 = db.prepare(`
+  const r2 = await db.prepare(`
     UPDATE deals
     SET ball_in_court = (
           SELECT CASE WHEN t.ball_in_court = 'us' THEN 'us'
@@ -106,7 +106,7 @@ export function reconcileThreadStates({ db }) {
     const senderClean = (f.new_sender || '').split('<')[0].trim().replace(/"/g, '').slice(0, 40) || 'brand';
     const when = (f.new_activity_at || '').slice(0, 10);
     const detail = `[auto-reconciled ${new Date().toISOString().slice(0,16).replace('T',' ')}] NEW REPLY received ${when} from ${senderClean}. Ball just flipped to us, message needs read + reply. Headline summary will refresh on pill open.`;
-    cleanupStmt.run(senderClean, detail, f.id);
+    await cleanupStmt.run(senderClean, detail, f.id);
   }
 
   return {

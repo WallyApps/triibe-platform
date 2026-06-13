@@ -37,7 +37,7 @@ export async function buildThisWeek({ db, creator, apiKey = null, stripQuotedRep
   if (!creator) return { deals: [] };
   // Pull all booked / in-works deals for this creator.
   // EXCLUDE funnel_stage='completed' — those live in the Completed tab.
-  const deals = db.prepare(`
+  const deals = await db.prepare(`
     SELECT * FROM deals
     WHERE creator_id = ?
       AND funnel_stage != 'completed'
@@ -46,13 +46,13 @@ export async function buildThisWeek({ db, creator, apiKey = null, stripQuotedRep
     ORDER BY
       CASE
         WHEN posting_date IS NOT NULL THEN posting_date
-        ELSE date(last_activity_at, '+14 days')
+        ELSE (last_activity_at::timestamptz + interval '14 days')
       END ASC`).all(creator);
 
   // Pre-fetch completed actions for these deals so we can mark them ✓
   const dealIds = deals.map(d => d.id);
   const completed = dealIds.length
-    ? db.prepare(`SELECT deal_id, action_kind, completed_at FROM action_completions
+    ? await db.prepare(`SELECT deal_id, action_kind, completed_at FROM action_completions
         WHERE deal_id IN (${dealIds.map(()=>'?').join(',')})`).all(...dealIds)
     : [];
   const completedMap = {};
@@ -303,7 +303,7 @@ export async function buildThisWeek({ db, creator, apiKey = null, stripQuotedRep
     if (isConfirmed) { confirmed.push(d); continue; }
     // Pending = brand has actively engaged. Check whether the brand recently
     // replied (within 7 days) AND it's not "rate_sent waiting" only.
-    const dealRow = db.prepare(`SELECT ball_in_court, last_activity_at, raw_stage FROM deals WHERE id=?`).get(d.deal_id);
+    const dealRow = await db.prepare(`SELECT ball_in_court, last_activity_at, raw_stage FROM deals WHERE id=?`).get(d.deal_id);
     const recentBrandActivity = dealRow?.last_activity_at
       && (Date.now() - new Date(dealRow.last_activity_at).getTime()) / 86400000 < 7;
     const isActiveNeg = dealRow?.ball_in_court === 'us' && recentBrandActivity;
@@ -360,9 +360,9 @@ export async function buildThisWeek({ db, creator, apiKey = null, stripQuotedRep
 }
 
 /** Mark an action as completed */
-export function completeAction({ db, deal_id, action_kind }) {
-  db.prepare(`INSERT OR REPLACE INTO action_completions (deal_id, action_kind, completed_at)
-    VALUES (?, ?, datetime('now'))`).run(deal_id, action_kind);
+export async function completeAction({ db, deal_id, action_kind }) {
+  await db.prepare(`INSERT INTO action_completions (deal_id, action_kind, completed_at)
+    VALUES (?, ?, datetime('now')) ON CONFLICT (deal_id, action_kind) DO UPDATE SET completed_at=excluded.completed_at`).run(deal_id, action_kind);
   // Auto-promote to Completed when ALL these are true:
   //   1. Deal is won/signed (state=won)
   //   2. The invoice action has been issued (kind=send_invoice OR chase_payment is done)
@@ -373,10 +373,10 @@ export function completeAction({ db, deal_id, action_kind }) {
   // Conservative: only if invoice was the action just completed.
   if (['send_invoice','chase_payment'].includes(action_kind)) {
     try {
-      const deal = db.prepare(`SELECT id, state, funnel_stage, raw_stage FROM deals WHERE id=?`).get(deal_id);
+      const deal = await db.prepare(`SELECT id, state, funnel_stage, raw_stage FROM deals WHERE id=?`).get(deal_id);
       if (deal && deal.state === 'won' && deal.funnel_stage !== 'completed') {
         // Check for payment-in-flight signal in latest brand message
-        const latestCls = db.prepare(`
+        const latestCls = await db.prepare(`
           SELECT m.classification, m.body FROM messages m
           JOIN threads t ON t.id = m.thread_id
           WHERE t.deal_id = ? AND m.from_us = 0
@@ -391,7 +391,7 @@ export function completeAction({ db, deal_id, action_kind }) {
           } catch {}
         }
         if (inFlight) {
-          db.prepare(`UPDATE deals SET funnel_stage='completed', raw_stage='completed',
+          await db.prepare(`UPDATE deals SET funnel_stage='completed', raw_stage='completed',
             updated_at=datetime('now') WHERE id=?`).run(deal_id);
         }
       }
@@ -401,8 +401,8 @@ export function completeAction({ db, deal_id, action_kind }) {
 }
 
 /** Un-mark an action (untick) */
-export function uncompleteAction({ db, deal_id, action_kind }) {
-  db.prepare(`DELETE FROM action_completions WHERE deal_id=? AND action_kind=?`)
+export async function uncompleteAction({ db, deal_id, action_kind }) {
+  await db.prepare(`DELETE FROM action_completions WHERE deal_id=? AND action_kind=?`)
     .run(deal_id, action_kind);
   return { ok: true };
 }

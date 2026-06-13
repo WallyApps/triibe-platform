@@ -40,7 +40,7 @@ const WEEKS = Math.ceil(HORIZON_DAYS / 7);
  * Build the rolling 13-week slot grid for a creator. Marks slots occupied
  * when a confirmed deal has its posting_date inside that week.
  */
-function buildSlots(db, creator) {
+async function buildSlots(db, creator) {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
   // Roll back to Monday so weeks are clean
@@ -61,7 +61,7 @@ function buildSlots(db, creator) {
   }
 
   // Mark slots occupied by confirmed deals with a posting_date
-  const booked = db.prepare(`
+  const booked = await db.prepare(`
     SELECT id, brand, fee_cents, posting_date, category
     FROM deals
     WHERE creator_id = ?
@@ -169,16 +169,16 @@ function sequence(slots, scoredDeals, creatorFloor = 100000) {
  * Compute the full 90-day strategic plan for one creator.
  * @returns { slots, plan, totals, by_month, scored_pending }
  */
-export function forecast(db, creator) {
+export async function forecast(db, creator) {
   // 1. Build calendar slot grid + mark confirmed bookings
-  const slots = buildSlots(db, creator);
+  const slots = await buildSlots(db, creator);
 
   // 2. Pull every pending deal that could potentially close in horizon.
   // Exclude deals that ALREADY have a posting_date — those are surfaced as
   // confirmed bookings via buildSlots() above, double-counting them in the
   // sequencer would inflate projected EV + cause the same brand to appear
   // twice (once "Jul 9 confirmed", once "Aug 24 projected").
-  const pending = db.prepare(`
+  const pending = await db.prepare(`
     SELECT id, brand, contact_name, fee_cents, posting_date, category,
            raw_stage, ball_in_court, state, last_activity_at
     FROM deals
@@ -193,8 +193,8 @@ export function forecast(db, creator) {
   // parsed from the actual conversation (OUR pitch + BRAND counter → blended).
   // Preserves the original ask in `our_quote_cents` so the UI can still show
   // "we pitched $X, brand at $Y, realistic close $Z" if needed.
-  const realistic = pending.map(d => {
-    const neg = parseNegotiation(db, d);
+  const realistic = await Promise.all(pending.map(async d => {
+    const neg = await parseNegotiation(db, d);
     return {
       ...d,
       our_quote_cents: neg.our_quote_cents,
@@ -204,10 +204,10 @@ export function forecast(db, creator) {
       // honest number. Fall back to original fee_cents if parser found nothing.
       fee_cents: neg.realistic_fee_cents ?? d.fee_cents,
     };
-  });
+  }));
 
   // 4. Score every pending deal's close probability
-  const scored = scoreDeals(db, realistic);
+  const scored = await scoreDeals(db, realistic);
   // Tag below-floor deals so the UI can flag them as "likely stale / parser
   // noise" without burning them from the visible pipeline.
   const creatorFloor = floorFor(creator);

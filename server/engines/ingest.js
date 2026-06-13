@@ -13,7 +13,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
-const TRIIBE_OPS = '/Users/rileywallack/triibe-ops';
+const TRIIBE_OPS = process.env.TRIIBE_OPS || '/Users/rileywallack/triibe-ops';
 const OUR_DOMAINS = ['@triibetalents.com'];
 const OUR_EMAILS  = ['cooper@theactionableai.com'];
 
@@ -23,10 +23,10 @@ const senderIsUs = sender => {
 };
 const sha = s => createHash('sha1').update(s).digest('hex').slice(0, 16);
 
-export function ingestAll(db) {
-  const stats = { gmail: ingestGmail(db), whatsapp: ingestWhatsApp(db) };
+export async function ingestAll(db) {
+  const stats = { gmail: await ingestGmail(db), whatsapp: await ingestWhatsApp(db) };
   // Update per-deal last_message_at from latest message in either channel.
-  db.exec(`
+  await db.exec(`
     UPDATE deals SET last_activity_at = COALESCE((
       SELECT MAX(sent_at) FROM messages m
       JOIN threads t ON t.id = m.thread_id
@@ -36,14 +36,14 @@ export function ingestAll(db) {
   return stats;
 }
 
-function ingestGmail(db) {
+async function ingestGmail(db) {
   const path = `${TRIIBE_OPS}/data/threads_snapshot.json`;
   if (!existsSync(path)) return { threads: 0, messages: 0, skipped: 'no snapshot' };
   const snap = JSON.parse(readFileSync(path, 'utf8'));
   const threadsObj = snap.threads || {};
   // Build thread_id -> deal_id index from deals.thread_id
   const dealByThread = Object.fromEntries(
-    db.prepare(`SELECT id, thread_id FROM deals WHERE thread_id IS NOT NULL`).all()
+    (await db.prepare(`SELECT id, thread_id FROM deals WHERE thread_id IS NOT NULL`).all())
       .map(r => [r.thread_id, r.id])
   );
 
@@ -64,11 +64,11 @@ function ingestGmail(db) {
     if (!msgs.length) continue;
     const last = msgs[msgs.length - 1];
     const lastUs = senderIsUs(last.sender);
-    upsertThread.run(tid, dealByThread[tid] || null, last.date, lastUs ? 'us' : 'them',
+    await upsertThread.run(tid, dealByThread[tid] || null, last.date, lastUs ? 'us' : 'them',
                      lastUs ? 'them' : 'us');
     nThreads++;
     for (const m of msgs) {
-      insertMsg.run(m.id, tid, m.sender || null, senderIsUs(m.sender) ? 1 : 0,
+      await insertMsg.run(m.id, tid, m.sender || null, senderIsUs(m.sender) ? 1 : 0,
         m.date || null, sha(`gm:${m.id}:${m.date}:${m.sender}`));
       nMessages++;
     }
@@ -76,7 +76,7 @@ function ingestGmail(db) {
   return { threads: nThreads, messages: nMessages, bodies: 'headers-only (need Gmail API for bodies)' };
 }
 
-function ingestWhatsApp(db) {
+async function ingestWhatsApp(db) {
   const livePath = `${TRIIBE_OPS}/data/whatsapp/live.json`;
   const mapPath  = `${TRIIBE_OPS}/data/wa_map.json`;
   if (!existsSync(livePath)) return { threads: 0, messages: 0, skipped: 'no live.json' };
@@ -112,7 +112,7 @@ function ingestWhatsApp(db) {
     const msgs = (chat.messages || []).slice().sort((a, b) => (a.ts || '').localeCompare(b.ts || ''));
     if (!msgs.length) continue;
     const last = msgs[msgs.length - 1];
-    upsertThread.run(threadId, dealId, chat.name, last.ts,
+    await upsertThread.run(threadId, dealId, chat.name, last.ts,
                      last.from_me ? 'us' : 'them',
                      last.from_me ? 'them' : 'us');
     nThreads++;
@@ -120,7 +120,7 @@ function ingestWhatsApp(db) {
       const mid = `wa:${threadId}:${sha(`${m.ts}:${m.body || ''}:${m.from_me}`)}`;
       const body = m.body || '';
       const snippet = body.slice(0, 120);
-      insertMsg.run(mid, threadId, m.from_me ? 'us' : (chat.name || 'brand'),
+      await insertMsg.run(mid, threadId, m.from_me ? 'us' : (chat.name || 'brand'),
         m.from_me ? 1 : 0, m.ts || null, snippet, body, mid);
       nMessages++;
     }
