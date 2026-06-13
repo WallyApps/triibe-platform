@@ -48,3 +48,6 @@ cook_all.mjs.log
 # Baileys WhatsApp auth session (creds.json + signal keys = full WA account access)
 # NEVER commit — these let anyone replay your authenticated session
 whatsapp-daemon/baileys-auth/
+
+# keep the documented example (not a real secret)
+!.env.example
