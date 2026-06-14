@@ -3,7 +3,7 @@
 // - Tells open pages to reload when activate fires (no manual cache busting)
 // - network-first for /, /index.html, /sw.js → so updates are picked up fast
 // - cache-first for static assets only
-const SHELL = 'triibe-shell-v176';
+const SHELL = 'triibe-shell-v217';
 const ALWAYS_LIVE = new Set(['/', '/index.html', '/sw.js', '/manifest.webmanifest']);
 
 self.addEventListener('install', e => {

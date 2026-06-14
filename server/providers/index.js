@@ -34,6 +34,29 @@ function runIdempotentMigrations(d) {
     "ALTER TABLE deals ADD COLUMN revived_at TEXT",
   ];
   for (const stmt of ddl) { try { d.exec(stmt); } catch { /* already exists */ } }
+
+  // Scheduled Sends (#141) — drafts queued to fire at a later time. Riley cooks
+  // a reply Sunday evening, picks "Schedule for Sun 8pm", and a background
+  // worker fires the send when the time arrives so it lands in the brand's
+  // inbox first thing Monday morning. CREATE TABLE IF NOT EXISTS is idempotent
+  // by itself; no try/catch needed.
+  d.exec(`CREATE TABLE IF NOT EXISTS scheduled_sends (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+    scheduled_for   TEXT NOT NULL,                    -- ISO datetime when to fire
+    status          TEXT NOT NULL DEFAULT 'pending',  -- pending|sent|failed|canceled
+    channel         TEXT NOT NULL,                    -- email|whatsapp
+    deal_id         TEXT,
+    thread_id       TEXT,
+    draft_id        TEXT,                             -- if linked to a Drafts row
+    body            TEXT NOT NULL,
+    to_addr         TEXT,                             -- email recipient or WA chat
+    fired_at        TEXT,                             -- when send was attempted
+    error           TEXT,
+    sent_message_id TEXT                              -- gmail msg id or wa msg id
+  )`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_sched_sends_status ON scheduled_sends(status, scheduled_for)`);
+  d.exec(`CREATE INDEX IF NOT EXISTS idx_sched_sends_deal ON scheduled_sends(deal_id)`);
 }
 
 function cfg(key, fallback) {

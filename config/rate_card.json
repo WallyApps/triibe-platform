@@ -6,8 +6,8 @@
     "ig_story_cents":    null,
     "tiktok_cents":      null,
     "ugc_cents":         null,
-    "floor_cents":       300000,
-    "_note": "Story rate TBD — Riley still figuring out. Floor is ~75% of standard."
+    "floor_cents":       150000,
+    "_note": "Story rate TBD. Floor is $1,500 — anything lower needs Riley's explicit OK."
   },
 
   "charlie": {
@@ -24,8 +24,16 @@
     "tiktok_cents":      500000,
     "ig_story_cents":    150000,
     "ugc_cents":         125000,
-    "floor_cents":       400000,
-    "_note": "Brian Wallack — basketball niche. 705k IG / 502k TikTok. Floor at $4K (~80% of TikTok standard) so we don't leak sub-floor on either platform."
+    "floor_cents":       150000,
+    "ugc_fallback_cents": 50000,
+    "song_promo_floor_cents": 35000,
+    "no_pay_allowed":    false,
+    "bcc_email":         "bwallsocialmedia@gmail.com",
+    "existing_exclusive_partners": [
+      { "brand": "Perfect Sport", "blocked_categories": ["supplements", "sports_nutrition", "protein", "pre_workout"] },
+      { "brand": "Gymshark",      "blocked_categories": ["apparel", "activewear", "athletic_apparel", "fitness_apparel", "fashion"] }
+    ],
+    "_note": "Brian Wallack — 705k IG / 502k TikTok. Per Brian's own rules: $1.5K Reel floor (cross-posted IG + TT + FB), $500 UGC fallback with full usage rights (he'll put on trial reels + tag), $350 song promo floor. NEVER product-only / no-pay. Long-term deals with Perfect Sport + Gymshark — any pitch in those categories surfaces as EXCLUSIVITY CLASH on the pill. bcc_email: Brian wants to be BCC'd on every outbound email — set his personal email here (replace placeholder)."
   },
 
   "exclusivity_policy": {

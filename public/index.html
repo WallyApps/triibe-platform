@@ -160,7 +160,35 @@
   /* Premium title: refined serif, gentler tracking, no gradient distraction */
   .topbar .title h2{font-family:'Manrope',system-ui,sans-serif;font-size:36px;letter-spacing:-0.022em;font-weight:800;line-height:1.02;color:var(--cream)}
   .topbar .title p{color:var(--cream-faint);font-size:11px;margin-top:7px;letter-spacing:.16em;text-transform:uppercase;font-weight:600;opacity:.65}
-  .search{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:8px 13px;color:var(--cream-faint);font-size:12.5px;width:230px}
+  .search-wrap{position:relative;flex:0 0 auto}
+  .search{display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:6px 13px;color:var(--cream-faint);font-size:12.5px;width:300px;transition:border-color .15s,background .15s}
+  .search:focus-within{border-color:rgba(232,230,220,.30);background:rgba(28,26,20,.7)}
+  .search .search-icon{flex:0 0 auto;color:var(--cream-faint);font-size:13px}
+  .search input{flex:1;min-width:0;background:transparent;border:none;outline:none;color:var(--cream);font-size:13px;font-family:'Manrope',sans-serif;padding:4px 0}
+  .search input::placeholder{color:var(--cream-faint)}
+
+  /* Search dropdown — ranked hits panel that appears below the input. Each row
+     is a deal / thread / message hit with the matched snippet in context.
+     Click → jumps to that deal pill on Today (or opens the thread modal). */
+  .search-dropdown{position:absolute;top:calc(100% + 6px);left:0;right:0;background:#16140F;border:1px solid rgba(232,230,220,.18);border-radius:11px;box-shadow:0 12px 32px -8px rgba(0,0,0,.85),0 4px 12px rgba(0,0,0,.5);max-height:60vh;overflow-y:auto;z-index:50;backdrop-filter:blur(20px)}
+  .search-dropdown .sd-header{padding:9px 14px;font-size:10.5px;color:var(--cream-faint);font-weight:800;letter-spacing:.08em;text-transform:uppercase;border-bottom:1px solid rgba(232,230,220,.08)}
+  .search-dropdown .sd-empty{padding:18px 14px;text-align:center;color:var(--cream-faint);font-size:12px}
+  .search-dropdown .sd-row{display:flex;align-items:flex-start;gap:10px;padding:10px 14px;cursor:pointer;border-bottom:1px solid rgba(232,230,220,.04);transition:background .12s}
+  .search-dropdown .sd-row:hover,.search-dropdown .sd-row.focused{background:rgba(232,230,220,.06)}
+  .search-dropdown .sd-row:last-child{border-bottom:none}
+  .search-dropdown .sd-kind{flex:0 0 auto;font-size:9px;font-weight:800;letter-spacing:.06em;padding:3px 6px;border-radius:5px;text-transform:uppercase;font-family:'Manrope',sans-serif;margin-top:1px}
+  .search-dropdown .sd-kind.deal{background:rgba(224,172,88,.18);color:#E0AC58}
+  .search-dropdown .sd-kind.thread{background:rgba(127,168,217,.18);color:#9DBEEB}
+  .search-dropdown .sd-kind.message{background:rgba(232,230,220,.08);color:var(--cream-faint)}
+  .search-dropdown .sd-body{flex:1;min-width:0}
+  .search-dropdown .sd-head{display:flex;align-items:center;gap:6px;font-size:12px;font-weight:700;color:var(--cream);margin-bottom:3px}
+  .search-dropdown .sd-brand{color:var(--cream)}
+  .search-dropdown .sd-creator{font-size:10px;color:var(--cream-faint);font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+  .search-dropdown .sd-more{font-size:10px;font-weight:800;color:#E0AC58;background:rgba(224,172,88,.14);padding:2px 6px;border-radius:5px;letter-spacing:.02em}
+  .search-dropdown .sd-when{margin-left:auto;font-size:10.5px;color:var(--cream-faint);font-weight:600;flex:0 0 auto}
+  .search-dropdown .sd-snippet{font-size:11.5px;color:var(--cream-dim);line-height:1.45;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+  .search-dropdown .sd-snippet mark{background:rgba(224,172,88,.30);color:var(--cream);padding:0 1px;border-radius:2px}
+  @media (max-width:780px){.search{width:100%}.topbar .search{display:flex}.search-wrap{flex:1;min-width:0}.search-dropdown{position:fixed;top:60px;left:8px;right:8px;max-height:70vh}}
   .switcher{display:flex;background:var(--card);border:1px solid var(--line);border-radius:9px;padding:3px}
   .switcher button{all:unset;cursor:pointer;padding:6px 14px;border-radius:7px;font-size:12.5px;font-weight:700;color:var(--cream-dim)}
   .switcher button.on{background:var(--cream);color:#0A0A0A}
@@ -427,6 +455,94 @@
      flip to dark-on-light so it stays readable. Status badge accents (amber
      waiting, red active, green signed) get darkened so they read on white. */
   .tw-deal{background:#FAFAF7;border:1px solid #E6E3D8;border-radius:22px;padding:16px 20px;margin-bottom:14px;cursor:pointer;color:#0E0E11;box-shadow:0 14px 30px -18px rgba(0,0,0,.85), 0 3px 8px rgba(0,0,0,.32);transition:background .15s var(--ease-soft),border-color .15s var(--ease-soft),transform .15s var(--ease-soft),box-shadow .15s var(--ease-soft)}
+  /* COMPACT pill — dark by default for calm scanning; cream body only when
+     expanded (where Riley reads). Used on Today's active deals, Close these
+     deals, Parked, Today's Work — one unified pattern across the platform.
+     Override .tw-deal's default cream styles (override is intentional — the
+     cream `.tw-deal` styles stay on the EXPANDED body, not the collapsed head). */
+  .tw-deal.compact{padding:13px 18px;border-radius:13px;margin-bottom:8px;background:rgba(20,18,14,.55);border:1px solid rgba(232,230,220,.08);color:var(--cream);box-shadow:0 2px 8px -2px rgba(0,0,0,.4);transition:background .14s var(--ease-soft),border-color .14s var(--ease-soft),transform .14s var(--ease-soft)}
+  .tw-deal.compact:hover{background:rgba(28,26,20,.7);border-color:rgba(232,230,220,.18);transform:translateY(-1px)}
+  .tw-deal.compact.open{padding-bottom:14px;border-color:rgba(232,230,220,.22);background:rgba(28,26,20,.7)}
+  .tw-deal.compact .tw-compact-row{display:flex;align-items:center;gap:10px;min-width:0}
+  .tw-deal.compact .tw-compact-l{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+  .tw-deal.compact .tw-creator-pill{font-size:10px;font-weight:800;letter-spacing:.06em;padding:3px 8px;border-radius:6px;flex:0 0 auto;text-transform:uppercase;font-family:'Manrope',sans-serif}
+  .tw-deal.compact .tw-creator-pill.cooper{background:rgba(127,168,217,.16);color:#9DBEEB}
+  .tw-deal.compact .tw-creator-pill.charlie{background:rgba(127,217,138,.16);color:#88D89D}
+  .tw-deal.compact .tw-creator-pill.brian{background:rgba(224,172,88,.18);color:#E0AC58}
+  .tw-deal.compact .tw-compact-brand{font-size:14.5px;font-weight:700;color:var(--cream);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-0.005em}
+  .tw-deal.compact .tw-compact-stage{font-size:9.5px;font-weight:800;letter-spacing:.06em;padding:3px 7px;border-radius:5px;background:rgba(232,230,220,.08);color:var(--cream-faint);flex:0 0 auto;font-family:'Manrope',sans-serif}
+  .tw-deal.compact .tw-compact-stage.signed{background:rgba(127,217,138,.14);color:#88D89D}
+  .tw-deal.compact .tw-compact-stage.pitching{background:rgba(127,168,217,.14);color:#9DBEEB}
+  .tw-deal.compact .tw-compact-r{display:flex;align-items:center;gap:10px;flex:0 0 auto;font-size:12px;color:var(--cream-faint);font-weight:700}
+  .tw-deal.compact .tw-compact-fee{color:var(--gold);font-weight:800;font-size:13px}
+  .tw-deal.compact .tw-compact-date{color:var(--cream-faint);font-weight:600;font-size:11.5px}
+  .tw-deal.compact .tw-compact-sub{display:flex;align-items:baseline;gap:7px;font-size:12px;color:var(--cream-faint);margin-top:5px;overflow:hidden;min-width:0}
+  .tw-deal.compact .tw-compact-step{font-weight:700;color:var(--cream-dim);flex:0 0 auto;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  /* Step due-date chip — amber accent so it pops on the dark row */
+  .tw-deal.compact .tw-compact-step-when{font-weight:700;font-size:10.5px;color:#E0AC58;background:rgba(224,172,88,.14);padding:2px 6px;border-radius:5px;margin-left:5px;letter-spacing:.01em}
+  .tw-deal.compact .tw-compact-dot{color:var(--cream-faint);opacity:.5;flex:0 0 auto}
+  .tw-deal.compact .tw-compact-summary{color:var(--cream-faint);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+  /* Body expansion — hidden until .open; uses cream tw-deal styling (the existing
+     loadPillBody output looks right against cream) so the body becomes a light
+     reading card nested inside the dark collapsed pill. */
+  .tw-deal.compact .tw-deal-body{display:none}
+  .tw-deal.compact.open .tw-deal-body{display:block;margin-top:12px;background:#FAFAF7;color:#0E0E11;border:1px solid rgba(232,230,220,.10);border-radius:11px;padding:14px 16px}
+  /* Mobile — keep two-line but allow brand to truncate harder + hide stage chip */
+  @media (max-width:640px){
+    .tw-deal.compact{padding:11px 14px}
+    .tw-deal.compact .tw-compact-brand{font-size:13.5px}
+    .tw-deal.compact .tw-compact-stage{display:none}
+    .tw-deal.compact .tw-compact-step{max-width:55%;font-size:11.5px}
+    .tw-deal.compact .tw-compact-summary{font-size:11.5px}
+  }
+  /* Parked pill — same compact dark pattern. Parked-specific bits (revisit
+     date, "Reach back out now" / "Change date" buttons) live inside the
+     expanded body, not the collapsed head. */
+  .parked-pill{padding:13px 18px;border-radius:13px;margin-bottom:8px;background:rgba(20,18,14,.55);border:1px solid rgba(232,230,220,.08);color:var(--cream);cursor:pointer;transition:background .14s var(--ease-soft),border-color .14s var(--ease-soft),transform .14s var(--ease-soft)}
+  /* Already-reached-out variant: dim everything in the collapsed view so Riley
+     can scan the top of the list for un-nudged deals at a glance. Server
+     bottom-sorts these so they cluster below the actionable ones. */
+  .parked-pill.park-renudged{background:rgba(20,18,14,.30);border-color:rgba(232,230,220,.04);opacity:.55}
+  .parked-pill.park-renudged:hover{opacity:.85;background:rgba(20,18,14,.45)}
+  .parked-pill.park-renudged .pp-l > span:not(.pp-renudged):not(.tw-creator-pill),
+  .parked-pill.park-renudged .pp-r{filter:saturate(0.4)}
+  .parked-pill .pp-renudged{font-size:9.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:2px 7px;border-radius:5px;background:rgba(159,208,176,.10);color:#9fd0b0;border:1px solid rgba(159,208,176,.22);margin-left:4px;flex:0 0 auto}
+  .parked-pill:hover{background:rgba(28,26,20,.7);border-color:rgba(232,230,220,.18);transform:translateY(-1px)}
+  .parked-pill.open{background:rgba(28,26,20,.7);border-color:rgba(232,230,220,.22);padding-bottom:14px}
+  .parked-pill .pp-row{display:flex;align-items:center;gap:10px;min-width:0}
+  .parked-pill .pp-l{display:flex;align-items:center;gap:10px;flex:1;min-width:0}
+  .parked-pill .pp-r{display:flex;align-items:center;gap:10px;flex:0 0 auto;font-size:12px;color:var(--cream-faint);font-weight:700}
+  .parked-pill .pp-fee{color:var(--gold);font-weight:800;font-size:13px}
+  .parked-pill .pp-revisit{padding:3px 7px;border-radius:5px;font-size:10px;font-weight:800;letter-spacing:.05em;text-transform:uppercase;background:rgba(232,230,220,.08);color:var(--cream-faint)}
+  .parked-pill .pp-revisit.soon{background:rgba(224,172,88,.18);color:#E0AC58}
+  .parked-pill .pp-revisit.none{background:rgba(232,230,220,.05);color:var(--cream-faint)}
+  .parked-pill .pp-sub{font-size:12px;color:var(--cream-faint);margin-top:5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .parked-pill .pp-body{display:none;margin-top:12px;background:#FAFAF7;color:#0E0E11;border:1px solid rgba(232,230,220,.10);border-radius:11px;padding:14px 16px}
+  .parked-pill.open .pp-body{display:block}
+  .parked-pill .pp-status-lbl{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:#6B6B70;font-weight:800;margin-bottom:5px}
+  /* Conversation thread inside parked pill — same iMessage-style bubbles as
+     active deal pills but with light-mode palette to match the pp-body. */
+  .parked-pill .pp-conv{margin-top:12px;padding-top:12px;border-top:1px solid #E6E3D8}
+  .parked-pill .pp-conv-log{display:flex;flex-direction:column;gap:8px;max-height:340px;overflow-y:auto;padding:4px 0}
+  .parked-pill .pp-conv-msg{display:flex;flex-direction:column;max-width:78%}
+  .parked-pill .pp-conv-msg.us{align-self:flex-end;align-items:flex-end}
+  .parked-pill .pp-conv-msg.them{align-self:flex-start;align-items:flex-start}
+  .parked-pill .pp-conv-who{font-size:10.5px;color:#7A7A82;font-weight:700;margin-bottom:2px;padding:0 4px}
+  .parked-pill .pp-conv-bubble{font-size:12.5px;line-height:1.5;padding:9px 12px;border-radius:13px;white-space:pre-wrap;word-wrap:break-word}
+  .parked-pill .pp-conv-msg.us .pp-conv-bubble{background:#0E0E11;color:#F4F1E5}
+  .parked-pill .pp-conv-msg.them .pp-conv-bubble{background:#EFECDF;color:#0E0E11;border:1px solid #DCD8C9}
+  .parked-pill .pp-status-text{font-size:13px;line-height:1.5;color:#1A1A22;margin-bottom:12px}
+  .parked-pill .pp-meta{font-size:11.5px;color:#6B6B70;margin-bottom:10px}
+  .parked-pill .pp-acts{display:flex;gap:8px}
+  .parked-pill .pp-acts button{flex:0 0 auto;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:800;cursor:pointer;font-family:'Manrope',sans-serif;border:1px solid #C9C4B3;background:#F4F1E5;color:#0E0E11;transition:background .14s}
+  .parked-pill .pp-acts button:hover{background:#ECE8DA}
+  .parked-pill .pp-acts button.primary{background:#0E0E11;color:#F4F1E5;border-color:#0E0E11}
+  /* Unread brand reply waiting — make the whole pill border red so it's
+     unmissable across active deals + close-these-deals + new leads. The inner
+     banner stays for the click-to-expand affordance; the border is the loud
+     at-a-glance signal that you have a brand message sitting unopened. */
+  .tw-deal.has-unread{border:2px solid #D9433B;box-shadow:0 0 0 4px rgba(217,67,59,.12), 0 14px 30px -18px rgba(0,0,0,.85), 0 3px 8px rgba(0,0,0,.32)}
+  .tw-deal.has-unread.open{border-color:#B5342D;box-shadow:0 0 0 4px rgba(217,67,59,.16), 0 24px 46px -20px rgba(0,0,0,.95), 0 7px 16px rgba(0,0,0,.45)}
   .tw-deal:first-of-type{}
   .tw-deal:last-of-type{margin-bottom:4px}
   .tw-deal:hover{background:#FFFFFF;border-color:#D6D2C4;transform:translateY(-1px);box-shadow:0 20px 38px -18px rgba(0,0,0,.9), 0 5px 12px rgba(0,0,0,.4)}
@@ -496,6 +612,24 @@
   .tw-deal.show-detail .tw-section-btn[data-sec=detail] .tw-section-arr{transform:rotate(90deg)}
   .tw-detail-block{display:none;margin-top:10px}
   .tw-deal.show-detail .tw-detail-block{display:block}
+  /* Full pipeline block — hidden by default, revealed when .show-pipeline is on.
+     Higher specificity than the generic "hide .tw-action when not show-pipeline"
+     rule so the AI-grounded step rows display correctly here. */
+  .tw-pipeline-block{display:none;margin-top:10px;padding:12px 14px;background:#F4F1E5;border:1px solid #DCD8C9;border-radius:11px}
+  .tw-deal.show-pipeline .tw-pipeline-block{display:block}
+  .tw-pipeline-block .tw-actions{display:flex;flex-direction:column;gap:8px}
+  .tw-pipeline-block .tw-action{display:flex;align-items:flex-start;gap:10px;padding:4px 0;font-size:12.5px;color:#3A3A40}
+  .tw-pipeline-block .tw-action .tw-dot{flex:0 0 18px;text-align:center;font-weight:800;color:#9A9A9F;line-height:1.4;font-size:13px}
+  .tw-pipeline-block .tw-action .tw-label{flex:1;min-width:0;line-height:1.5}
+  .tw-pipeline-block .tw-action .tw-label b{display:block;color:#0E0E11;font-weight:800}
+  .tw-pipeline-block .tw-action .tw-label .tw-detail{display:block;color:#5A5A62;font-size:11.5px;margin-top:1px}
+  .tw-pipeline-block .tw-action .tw-when{flex:0 0 auto;font-size:11px;color:#6B6B70;font-weight:700;letter-spacing:.02em}
+  .tw-pipeline-block .tw-action.status-done .tw-dot{color:#2F8F4A}
+  .tw-pipeline-block .tw-action.status-done .tw-label b{text-decoration:line-through;color:#7A7A82;font-weight:700}
+  .tw-pipeline-block .tw-action.status-active{background:rgba(154,42,34,.06);border-radius:8px;padding:6px 8px;margin-left:-8px}
+  .tw-pipeline-block .tw-action.status-active .tw-dot{color:#9A2A22}
+  .tw-pipeline-block .tw-action.status-waiting .tw-dot{color:#B4862C}
+  .tw-pipeline-foot{margin-top:10px;padding-top:8px;border-top:1px dashed #DCD8C9;font-size:10.5px;color:#7A7A82;letter-spacing:.02em}
   /* SIGNED / CONTRACT RECEIVED / NEGOTIATING stage badges in header — re-tune
      for white background. */
   .tw-deal .tw-deal-stage.signed{background:#D9F2DF;color:#1F6B3A;border:1px solid #B6E0C0}
@@ -552,6 +686,80 @@
   .pipeline-snapshot .ps-stat.ps-dim{opacity:.7}
   .pipeline-snapshot .ps-dot{color:var(--cream-faint);opacity:.4}
   @media (max-width:780px){.pipeline-snapshot{flex-direction:column;align-items:flex-start;gap:10px;padding:12px 14px}.pipeline-snapshot .ps-creator{font-size:18px}.pipeline-snapshot .ps-stats{font-size:12px;gap:8px}}
+
+  /* TODAY'S WORK — cross-creator action queue. Mode header up top sets the
+     energy of the page (Saturday creator prep vs Tuesday grind). Each section
+     is a collapsible group; each row is a thin clickable strip with a colored
+     creator pill on the left, brand + one-line headline in the middle, age
+     chip on the right. */
+  .tw-mode-header{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:18px 22px;margin:8px 0 18px;background:linear-gradient(135deg,rgba(232,230,220,.06) 0%,rgba(242,232,213,.025) 100%);border:1px solid rgba(232,230,220,.16);border-radius:14px}
+  .tw-mode-header .tw-mh-l{display:flex;flex-direction:column;gap:5px;min-width:0}
+  .tw-mode-header .tw-mh-title{font-family:'Manrope',system-ui,sans-serif;font-size:22px;letter-spacing:-0.015em;color:var(--cream);line-height:1.1}
+  .tw-mode-header .tw-mh-sub{font-size:12.5px;color:var(--cream-faint);letter-spacing:.01em}
+  .tw-mode-header .tw-mh-r{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:0 0 auto}
+  .tw-mode-header .tw-mh-count{font-family:'Manrope',system-ui,sans-serif;font-size:24px;color:var(--gold);line-height:1}
+  .tw-mode-header .tw-mh-time{font-size:11px;color:var(--cream-faint);letter-spacing:.05em;text-transform:uppercase}
+  .tw-mode-header.weekend-prep .tw-mh-title,.tw-mode-header.sunday-evening .tw-mh-title{color:#E0AC58}
+  .tw-mode-header.winding-down .tw-mh-title{color:#A8A8A8}
+
+  .tw-section{margin-bottom:18px;background:rgba(232,230,220,.02);border:1px solid rgba(232,230,220,.08);border-radius:13px;overflow:hidden}
+  .tw-section-head{display:flex;align-items:center;gap:10px;padding:13px 18px;cursor:pointer;user-select:none;background:rgba(232,230,220,.025);border-bottom:1px solid rgba(232,230,220,.06);transition:background .15s}
+  .tw-section-head:hover{background:rgba(232,230,220,.05)}
+  .tw-section-head .tw-emoji{font-size:16px}
+  .tw-section-head .tw-label{font-size:13.5px;font-weight:700;color:var(--cream);letter-spacing:-0.005em}
+  .tw-section-head .tw-line{flex:1;height:1px;background:rgba(232,230,220,.07);margin:0 4px}
+  .tw-section-head .tw-count{font-size:12px;font-weight:800;color:var(--cream-faint);padding:3px 9px;background:rgba(232,230,220,.06);border-radius:9px}
+  .tw-section-head .tw-caret{font-size:11px;color:var(--cream-faint);transition:transform .18s}
+  .tw-section.collapsed .tw-section-head .tw-caret{transform:rotate(-90deg)}
+  .tw-section.collapsed .tw-section-body{display:none}
+  .tw-section-body{padding:4px 0}
+
+  .tw-row{display:flex;align-items:center;gap:12px;padding:11px 18px;cursor:pointer;border-bottom:1px solid rgba(232,230,220,.04);transition:background .12s}
+  .tw-row:last-child{border-bottom:none}
+  .tw-row:hover{background:rgba(232,230,220,.04)}
+  .tw-row .tw-creator-pill{font-size:10.5px;font-weight:800;letter-spacing:.04em;padding:4px 9px;border-radius:7px;flex:0 0 auto;text-transform:uppercase}
+  .tw-row .tw-creator-pill.cooper{background:rgba(127,168,217,.16);color:#9DBEEB}
+  .tw-row .tw-creator-pill.charlie{background:rgba(127,217,138,.16);color:#88D89D}
+  .tw-row .tw-creator-pill.brian{background:rgba(224,172,88,.18);color:#E0AC58}
+  .tw-row .tw-brand{font-size:13.5px;font-weight:700;color:var(--cream);flex:0 0 auto;min-width:0;max-width:30%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tw-row .tw-headline{flex:1;font-size:12.5px;color:var(--cream-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+  .tw-row .tw-meta{flex:0 0 auto;display:flex;align-items:center;gap:8px;font-size:11px;color:var(--cream-faint);font-weight:700}
+  .tw-row .tw-fee{color:var(--gold)}
+  .tw-row .tw-ch{font-size:10px}
+  .tw-empty{padding:24px;text-align:center;color:var(--cream-faint);font-size:12.5px}
+
+  /* Inline row expansion — clicking a Today's Work row opens the full deal
+     pill (conversation, cook reply, send, attachments) right below the row.
+     No tab navigation, all triage happens on this page. */
+  .tw-row.open{background:rgba(232,230,220,.08);box-shadow:inset 2px 0 0 var(--gold)}
+  .tw-row-body{display:none;padding:0 14px 14px 14px;background:rgba(0,0,0,.18);border-bottom:1px solid rgba(232,230,220,.04)}
+  .tw-row-body .tw-row-pill{margin-top:8px}
+  .tw-row-loading{padding:18px;text-align:center;color:var(--cream-faint);font-size:12px}
+
+  /* loadPillBody renders .acts2 (Cook reply, Message creator, voice memo) at
+     the bottom of the deal body. The existing button styling lives under
+     `.tw-deal-body .acts2` and `.pill .acts2` — neither matches our wrapper
+     (.tw-deal directly), so without this they collapse to user-agent default
+     and look tiny + crammed. Mirrors the .tw-deal-body button look. */
+  .tw-row-pill .acts2{display:flex;gap:8px;margin-top:14px;flex-wrap:wrap}
+  .tw-row-pill .acts2 button{flex:1;min-width:140px;padding:11px 14px;font-size:12.5px;font-weight:800;border-radius:10px;cursor:pointer;border:1px solid #D6D2C4;background:#F4F1E5;color:#0E0E11;font-family:'Manrope',sans-serif;transition:transform .15s,box-shadow .15s,background .15s}
+  .tw-row-pill .acts2 button:hover{transform:translateY(-1px);box-shadow:0 4px 10px rgba(0,0,0,.18);background:#ECE8DA}
+  .tw-row-pill .acts2 button.primary{background:#0E0E11;color:#F4F1E5;border-color:#0E0E11;box-shadow:0 4px 10px rgba(0,0,0,.25)}
+  .tw-row-pill .acts2 button.primary:hover{background:#1A1A1F}
+  .tw-row-pill .acts2 button.mini{flex:0 0 auto;min-width:auto;padding:11px 13px}
+
+  /* Pitch panel — inline review for unmatched brand inbound. Same fields as
+     the Pitches tab pill (subject/from/body/create/dismiss), just rendered
+     directly under the row instead of navigating away. */
+  .tw-pitch-panel{padding:14px 0 4px;color:#0E0E11;background:#FAFAF7;border-radius:14px;margin-top:8px;padding:14px 16px;border:1px solid #E6E3D8}
+  .tw-pitch-panel .tw-pp-row{margin-bottom:10px}
+  .tw-pitch-panel .tw-pp-lbl{display:block;font-size:10px;font-weight:800;letter-spacing:.08em;color:#5A5A62;text-transform:uppercase;margin-bottom:3px}
+  .tw-pitch-panel .tw-pp-body{font-size:12.5px;line-height:1.5;color:#1A1A22;white-space:pre-wrap;max-height:240px;overflow-y:auto}
+  .tw-pitch-panel .tw-pp-acts{display:flex;gap:8px;margin-top:12px}
+  .tw-pitch-panel .tw-pp-acts button{flex:1;padding:9px 14px;border-radius:9px;border:1px solid #C9C4B3;background:#FFFFFF;color:#0E0E11;cursor:pointer;font-size:12.5px;font-weight:700;font-family:inherit}
+  .tw-pitch-panel .tw-pp-acts button.primary{background:#0E0E11;color:#F4F1E5;border-color:#0E0E11}
+  .tw-pitch-panel .tw-pp-acts button:disabled{opacity:.5;cursor:wait}
+  @media (max-width:780px){.tw-mode-header{flex-direction:column;align-items:flex-start;gap:10px;padding:14px 16px}.tw-mode-header .tw-mh-title{font-size:18px}.tw-mode-header .tw-mh-r{flex-direction:row;align-items:center;gap:8px}.tw-row .tw-brand{max-width:50%}}
 
   /* MORNING BRIEF — the hero. Owns the top of the homepage with breathing room
      2-3x what the other sections have. Visual hierarchy: this is the page. */
@@ -686,6 +894,19 @@
   .fb-schedule .fb-head-title{font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:var(--cream-faint)}
   .fb-schedule .fb-head-total{font-family:'Manrope',system-ui,sans-serif;font-size:18px;font-weight:800;color:var(--gold);font-variant-numeric:tabular-nums;letter-spacing:-0.015em}
   .fb-schedule .fb-head-total small{font-size:10px;font-weight:700;color:var(--cream-faint);letter-spacing:.04em;margin-left:5px}
+  /* Strategy chip selector — shown in the cook modal before the draft is cooked.
+     When the host has .posture-mode, we strip its own background/padding so
+     the chips render edge-to-edge in their own minimalist column. */
+  .posture-mode{background:transparent!important;border:none!important;padding:0!important;max-height:none!important;overflow:visible!important}
+  .posture-chips{display:flex;flex-direction:column;gap:5px;margin:0}
+  .posture-chip{display:flex;align-items:center;justify-content:space-between;gap:10px;text-align:left;width:100%;padding:8px 12px;background:#1A1A1F;border:1px solid #2A2A30;border-radius:9px;color:var(--cream);cursor:pointer;font-family:inherit;transition:background .12s ease,border-color .12s ease,transform .08s ease}
+  .posture-chip:hover{background:#22222A;border-color:#3A3A45}
+  .posture-chip:active{transform:translateY(1px)}
+  .posture-chip.recommended{border-color:rgba(232,230,220,.4);box-shadow:0 0 0 1px rgba(232,230,220,.15) inset}
+  .posture-chip-l{display:flex;align-items:baseline;gap:8px;min-width:0;flex:1}
+  .posture-chip-label{font-size:12.5px;font-weight:800;letter-spacing:.005em;color:var(--cream);white-space:nowrap}
+  .posture-chip-tag{font-size:8.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;background:rgba(232,230,220,.12);color:var(--cream-dim);padding:1px 5px;border-radius:4px;flex:0 0 auto}
+  .posture-chip-hint{font-size:11px;color:var(--cream-dim);line-height:1.35;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:right}
   .fb-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:14px;padding:9px 4px;border-radius:8px;cursor:pointer;transition:background .12s}
   .fb-row:hover{background:rgba(232,230,220,.04)}
   .fb-row + .fb-row{border-top:1px solid rgba(232,230,220,.06)}
@@ -701,6 +922,17 @@
   .fb-schedule .fb-foot:hover{color:var(--cream-dim)}
   .fb-schedule .fb-foot-cta{color:var(--gold);font-weight:700;letter-spacing:.03em}
   .fb-empty-note{font-size:11.5px;color:var(--cream-faint);padding:8px 4px;line-height:1.5;font-style:italic}
+  /* PROJECTED section — same layout but dimmer so it can't be mistaken for
+     real bookings. Header says "If you close these" + amber accent on the $;
+     each row sits at lower opacity with a left bar to mark "speculative." */
+  .fb-schedule .fb-head-projected{margin-top:12px;padding-top:10px;border-top:1px solid rgba(232,230,220,.10);border-bottom:none;padding-bottom:6px}
+  .fb-schedule .fb-head-projected .fb-head-title{color:#E0AC58;opacity:.85}
+  .fb-schedule .fb-head-projected .fb-head-total{color:#E0AC58;opacity:.85;font-size:16px}
+  .fb-schedule .fb-head-projected .fb-head-total small{color:var(--cream-faint)}
+  .fb-row-projected{opacity:.68;box-shadow:inset 2px 0 0 rgba(224,172,88,.45)}
+  .fb-row-projected:hover{opacity:.85}
+  .fb-row-projected .fb-row-fee{color:#E0AC58}
+  .fb-divider{height:6px}
   @media (max-width:780px){.fb-schedule{padding:12px 14px}.fb-row-date{min-width:0;font-size:11px}.fb-row-brand{font-size:12.5px}.fb-row-fee{font-size:13px}}
   .tw-deal-stage.signed{background:var(--green-bg);color:var(--green)}
   .tw-deal-stage.pitching{background:rgba(127,168,217,.13);color:#7FA8D9}
@@ -1190,6 +1422,7 @@
     </div>
     <nav class="nav" id="nav">
       <button data-g="creators"><span class="ic">◐</span> Creators</button>
+      <button data-g="todaywork"><span class="ic">⚡</span> Today's Work <span class="badge" id="todayworkBadge"></span></button>
       <button data-g="today" class="active"><span class="ic">◉</span> Today</button>
       <button data-g="inbox"><span class="ic">📨</span> Pitches <span class="badge" id="inboxBadge">…</span></button>
       <!-- Follow ups folded into Inbox as a filter — kept hidden so deep links still work -->
@@ -1217,7 +1450,13 @@
         <h2 id="ptitle">Overview</h2>
         <p id="psub">Everything that needs you, right now — Thu, Jun 4 2026</p>
       </div>
-      <div class="search">🔎 Search deals, brands…</div>
+      <div class="search-wrap" id="searchWrap">
+        <div class="search">
+          <span class="search-icon">🔎</span>
+          <input id="searchInput" type="text" placeholder="Search messages, brands, contacts…" autocomplete="off" />
+        </div>
+        <div class="search-dropdown" id="searchDropdown" style="display:none"></div>
+      </div>
       <!-- Topbar Cooper/Charlie pills removed in favor of sidebar Creators page.
            Hidden (display:none) instead of deleted so paintSwitcher() + click
            handler code doesn't break, and the on/off state stays in sync if we
@@ -1402,6 +1641,15 @@
     <!-- CREATORS — landing page with creator cards. Click a card to open that creator's workspace. -->
     <section class="page" id="creators">
       <div id="creatorCards" class="creator-cards"></div>
+    </section>
+
+    <!-- TODAY'S WORK — cross-creator action queue (Cooper + Charlie + Brian
+         combined). Page header shows the auto-detected work mode (weekday-grind,
+         weekend-prep, sunday-evening, winding-down) so the energy of the page
+         matches what work is appropriate for the moment. -->
+    <section class="page" id="todaywork">
+      <div id="todayworkHeader" class="tw-mode-header"></div>
+      <div id="todayworkTray"></div>
     </section>
 
     <!-- PARKED — deals on ice with a comeback date. When revisit_at hits today,
@@ -1634,7 +1882,8 @@
     <div class="qcact" style="margin-top:14px;gap:10px">
       <button id="dmRewrite" style="background:var(--card2);border:1px solid var(--line2);color:var(--cream);font-weight:800;padding:10px 14px;border-radius:9px;cursor:pointer">↺ Rewrite</button>
       <button id="dmOpen" style="background:var(--card2);border:1px solid var(--line2);color:var(--cream);font-weight:800;padding:10px 14px;border-radius:9px;cursor:pointer">↗ Open in Gmail</button>
-      <button id="dmSend" class="go" style="margin-left:auto;background:var(--gold);color:#0A0A0A;border:none;font-weight:800;padding:10px 20px;border-radius:9px;cursor:pointer">✓ Approve &amp; Send</button>
+      <button id="dmSchedule" style="margin-left:auto;background:#2A2A30;color:#E0AC58;border:1px solid #E0AC58;font-weight:800;padding:10px 16px;border-radius:9px;cursor:pointer" title="Schedule this draft to send later — useful for weekend cooking">📤 Schedule</button>
+      <button id="dmSend" class="go" style="background:var(--gold);color:#0A0A0A;border:none;font-weight:800;padding:10px 20px;border-radius:9px;cursor:pointer">✓ Approve &amp; Send</button>
     </div>
     <div id="dmStatus" style="margin-top:12px;font-size:12px;color:var(--cream-faint);text-align:center"></div>
   </div>
@@ -1662,6 +1911,7 @@
   const groups = {
     today:{t:["Today","Everything that needs you — Thu, Jun 4 2026"],pages:[["overview","Overview"],["completed","Completed"],["contracts","Contracts"]]},
     creators:{t:["Creators","Tap a creator to open their workspace"],pages:[["creators","Creators"]]},
+    todaywork:{t:["Today's Work","Cross-creator action queue — replies, pitches, deliverables, follow-ups"],pages:[["todaywork","Today's Work"]]},
     parked:{t:["Parked","Deals on ice with a comeback date — auto-revive when the wait period ends"],pages:[["parked","Parked"]]},
     // Threads merged into Inbox — keep entry so existing deep links don't error.
     inbox:{t:["Pitches","Unmatched brand inbound to triage, plus active negotiations to close"],pages:[["inbox","Pitches"]]},
@@ -1737,7 +1987,13 @@
     }
     showPage(grp.pages[0][0]);
   }
-  nav.addEventListener('click',e=>{const b=e.target.closest('button'); if(!b)return; openGroup(b.dataset.g);});
+  nav.addEventListener('click',e=>{
+    const b=e.target.closest('button'); if(!b)return;
+    openGroup(b.dataset.g);
+    // Remember which tab Riley is on so refresh lands him back here instead
+    // of bouncing him to Today every time. Survives full reload + new tab.
+    try { localStorage.setItem('triibe.activeGroup', b.dataset.g); } catch {}
+  });
   document.querySelectorAll('.switcher button').forEach(b=>b.addEventListener('click',()=>{
     document.querySelectorAll('.switcher button').forEach(x=>x.classList.remove('on')); b.classList.add('on');
   }));
@@ -1751,7 +2007,13 @@
       r.style.display = show ? '' : 'none';
     });
   });}
-  openGroup('today');
+  // Open the tab Riley was last on (saved in nav click handler). Fall back to
+  // Today if nothing's stored or the stored value isn't a known group.
+  (() => {
+    let saved = null;
+    try { saved = localStorage.getItem('triibe.activeGroup'); } catch {}
+    openGroup(saved && groups[saved] ? saved : 'today');
+  })();
 
   // Creator-chat modal — close on X click, backdrop click, or Esc key
   document.addEventListener('click', (e) => {
@@ -2481,6 +2743,165 @@ async function renderMoneyTab() {
 // the deal's fee_cents + posting_date) or an object override for multi-video deals:
 //   { id, label?, fee_cents?, posting_date? }
 // Edit this array to add/remove/reorder rows.
+// One-time document-level delegated click handler for schedule rows.
+// Survives every render of #forecastBanner (which wipes innerHTML, killing
+// per-row listeners). Lives on document so it never needs to be re-attached.
+// Handles both curated rows (data-deal points at a real deal id) AND the
+// fallback forecaster rows. Two earlier per-row handler bugs (wrong attribute
+// + no fallback when the pill isn't on the current tab) caused silent
+// dead-clicks; routing it here eliminates the re-attach race entirely.
+// Reusable: route to + expand a deal's pill from anywhere in the app.
+// Used by the schedule click handler + the parked "Reach back out now" button.
+// Same flow: try in-place expand, else fetch stage/state, route to the right
+// tab, force Close-these-deals sub-section if going to Pitches, poll for the
+// pill to render, then expand it.
+window.jumpToDeal = async function jumpToDeal(id) {
+  if (!id) return;
+  const inPlace = document.querySelector(`.tw-deal[data-deal="${id}"]`);
+  if (inPlace && inPlace.offsetParent !== null) {
+    inPlace.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const trigger = inPlace.querySelector('.tw-compact-row')
+                  || inPlace.querySelector('.tw-deal-hdr');
+    if (trigger && !inPlace.classList.contains('open')) trigger.click();
+    return;
+  }
+  let stage = null, state = null, creatorId = null;
+  try {
+    const d = await fetch(`/api/deals/${id}`).then(r => r.json());
+    stage = d.funnel_stage; state = d.state; creatorId = d.creator_id;
+    if (creatorId && typeof selectCreator === 'function') selectCreator(creatorId);
+  } catch {}
+  let targetTab = 'today';
+  if (state === 'dormant') targetTab = 'parked';
+  else if (stage === 'pitching') targetTab = 'inbox';
+  else {
+    try {
+      const tw = await fetch(`/api/this-week?creator=${creatorId || 'cooper'}`).then(r => r.json());
+      const inConfirmed = (tw.deals || []).some(d => d.deal_id === id);
+      const inPending   = (tw.pending || []).some(d => d.deal_id === id);
+      if (inPending && !inConfirmed) targetTab = 'inbox';
+    } catch {}
+  }
+  document.querySelector(`#nav button[data-g="${targetTab}"]`)?.click();
+  if (targetTab === 'inbox') {
+    const switcher = document.getElementById('pitchesSwitcher');
+    const closeBtn = switcher?.querySelector('[data-sec="close"]');
+    if (closeBtn && !closeBtn.classList.contains('on')) closeBtn.click();
+    const closeHost = document.getElementById('pitchesCloseTray');
+    const leadsHost = document.getElementById('pitchesLeadsSection');
+    if (closeHost) closeHost.style.display = '';
+    if (leadsHost) leadsHost.style.display = 'none';
+  }
+  let tries = 0;
+  const interval = setInterval(() => {
+    const pill = document.querySelector(`.tw-deal[data-deal="${id}"]`);
+    if (pill && pill.offsetParent !== null) {
+      clearInterval(interval);
+      const closeTray = pill.closest('#closeTheseTray, #pitchesCloseTray, .tw-tray-gold');
+      if (closeTray?.classList.contains('collapsed')) {
+        closeTray.classList.remove('collapsed');
+        const body = closeTray.querySelector('.tw-tray-body');
+        if (body) body.style.display = '';
+        try { localStorage.setItem('closeTheseCollapsed', '0'); } catch {}
+      }
+      pill.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const trigger = pill.querySelector('.tw-compact-row')
+                    || pill.querySelector('.tw-deal-hdr');
+      if (trigger && !pill.classList.contains('open')) trigger.click();
+    } else if (++tries > 40) {
+      clearInterval(interval);
+    }
+  }, 120);
+};
+
+if (!window.__JUMP_DEAL_WIRED) {
+  window.__JUMP_DEAL_WIRED = true;
+  document.addEventListener('click', async (e) => {
+    const rowEl = e.target.closest('[data-act="jump-deal"]');
+    if (!rowEl) return;
+    const id = rowEl.dataset.deal;
+    if (!id) return;
+    jumpToDeal(id);
+    return;
+    // (legacy code below kept inert for now, will trim next pass)
+    // 1) In-place expand if the pill is VISIBLE on the current page.
+    // offsetParent === null when any ancestor has display:none — important here
+    // because Pitches DOM stays mounted after Riley navigates away, so a naive
+    // selector would find the hidden Pitches pill and "succeed" without ever
+    // routing. Only fast-path when the pill is actually on-screen.
+    const inPlace = document.querySelector(`.tw-deal[data-deal="${id}"]`);
+    if (inPlace && inPlace.offsetParent !== null) {
+      inPlace.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const trigger = inPlace.querySelector('.tw-compact-row')
+                    || inPlace.querySelector('.tw-deal-hdr');
+      if (trigger && !inPlace.classList.contains('open')) trigger.click();
+      return;
+    }
+    // 2) Look up the deal to figure out which tab owns it.
+    let stage = null, state = null, creatorId = null;
+    try {
+      const d = await fetch(`/api/deals/${id}`).then(r => r.json());
+      stage = d.funnel_stage; state = d.state; creatorId = d.creator_id;
+      if (creatorId && typeof selectCreator === 'function') selectCreator(creatorId);
+    } catch {}
+    // Tab routing — Today only renders CONFIRMED in-works/won deals. Pending
+    // in_works deals (Napkin, Combos, InVideo, Abacus, etc) live on Pitches
+    // under Close these deals. Check /api/this-week to know which list owns
+    // this deal so we route to the right tab on the first try.
+    let targetTab = 'today';
+    if (state === 'dormant') targetTab = 'parked';
+    else if (stage === 'pitching') targetTab = 'inbox';
+    else {
+      try {
+        const tw = await fetch(`/api/this-week?creator=${creatorId || 'cooper'}`).then(r => r.json());
+        const inConfirmed = (tw.deals || []).some(d => d.deal_id === id);
+        const inPending   = (tw.pending || []).some(d => d.deal_id === id);
+        if (inPending && !inConfirmed) targetTab = 'inbox';  // Close these deals tray
+      } catch {}
+    }
+    document.querySelector(`#nav button[data-g="${targetTab}"]`)?.click();
+    // If we routed to Pitches, force the "Close these deals" sub-section
+    // active. The Pitches page has a switcher (Close these deals / New leads);
+    // if Riley last left it on New leads, the Close these deals tray is
+    // display:none and the pill (though in the DOM) is invisible. Clicking
+    // the switcher button flips visibility before we scroll/expand.
+    if (targetTab === 'inbox') {
+      const switcher = document.getElementById('pitchesSwitcher');
+      const closeBtn = switcher?.querySelector('[data-sec="close"]');
+      if (closeBtn && !closeBtn.classList.contains('on')) closeBtn.click();
+      // Belt-and-suspenders — force display in case the click handler hasn't
+      // been wired yet on first nav.
+      const closeHost  = document.getElementById('pitchesCloseTray');
+      const leadsHost  = document.getElementById('pitchesLeadsSection');
+      if (closeHost) closeHost.style.display = '';
+      if (leadsHost) leadsHost.style.display = 'none';
+    }
+    // 3) Poll for the pill to render. If the parent Close-these-deals tray
+    // is collapsed (Today version), expand it first.
+    let tries = 0;
+    const interval = setInterval(() => {
+      const pill = document.querySelector(`.tw-deal[data-deal="${id}"]`);
+      if (pill && pill.offsetParent !== null) {  // offsetParent === null when ancestor display:none
+        clearInterval(interval);
+        const closeTray = pill.closest('#closeTheseTray, #pitchesCloseTray, .tw-tray-gold');
+        if (closeTray?.classList.contains('collapsed')) {
+          closeTray.classList.remove('collapsed');
+          const body = closeTray.querySelector('.tw-tray-body');
+          if (body) body.style.display = '';
+          try { localStorage.setItem('closeTheseCollapsed', '0'); } catch {}
+        }
+        pill.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const trigger = pill.querySelector('.tw-compact-row')
+                      || pill.querySelector('.tw-deal-hdr');
+        if (trigger && !pill.classList.contains('open')) trigger.click();
+      } else if (++tries > 40) {
+        clearInterval(interval);
+      }
+    }, 120);
+  }, true);  // capture phase — runs before any per-row handler that might
+             // get attached during a re-render race
+}
+
 const PINNED_SCHEDULE = {
   cooper: [
     'minimax-keyshe',
@@ -2502,6 +2923,7 @@ const PINNED_SCHEDULE = {
 async function renderForecastBanner() {
   const host = document.getElementById('forecastBanner');
   if (!host) return;
+  const _gen = window.CREATOR_GEN;
   try {
     const creator = CREATOR_FILTER || 'cooper';
     const usd = c => '$' + Math.round((c||0)/100).toLocaleString();
@@ -2509,6 +2931,7 @@ async function renderForecastBanner() {
     // Curated mode — render the pinned list exactly as Riley ordered them.
     if (pinnedIds.length) {
       const all = await api(`/api/deals?creator=${creator}&limit=500`);
+      if (_gen !== window.CREATOR_GEN) return;
       const byId = new Map((all || []).map(d => [d.id, d]));
       // Normalize each entry: string id → simple row, object → row with overrides
       const rows = pinnedIds.map(entry => {
@@ -2558,23 +2981,23 @@ async function renderForecastBanner() {
       host.querySelector('[data-act="forecast-jump"]')?.addEventListener('click', () => {
         document.querySelector('#nav button[data-g="money"]')?.click();
       });
-      host.querySelectorAll('[data-act="jump-deal"]').forEach(el => {
-        el.addEventListener('click', () => {
-          const id = el.dataset.deal;
-          if (!id) return;
-          const pill = document.querySelector(`[data-deal-id="${id}"]`);
-          if (pill) { pill.scrollIntoView({behavior:'smooth', block:'center'}); pill.click(); }
-        });
-      });
+      // Row clicks handled by the module-level document delegation defined
+      // above. No per-row addEventListener here — they would double-fire with
+      // the delegated handler and toggle the pill back closed.
       return;
     }
     // Fallback for creators without a curated list (e.g. Charlie) — use forecaster slot order.
     const f = await api(`/api/forecast?creator=${creator}`);
+    if (_gen !== window.CREATOR_GEN) return;
     const todayISO = new Date().toISOString().slice(0,10);
-    const upcoming = (f.slots || [])
-      .filter(s => s.occupied && s.week_end >= todayISO)
-      .slice(0, 4);
-    if (!upcoming.length) {
+    // Split booked vs projected so the page never lies about what's locked.
+    // BOOKED = occupied && !projected (real signed/in-works deals with a real
+    // posting date). PROJECTED = forecaster's guess at where a pending deal
+    // might land if you close it. Renders as two visually-distinct sections.
+    const allUpcoming = (f.slots || []).filter(s => s.occupied && s.week_end >= todayISO);
+    const booked    = allUpcoming.filter(s => !s.projected).slice(0, 6);
+    const projected = allUpcoming.filter(s =>  s.projected).slice(0, 6);
+    if (!booked.length && !projected.length) {
       host.innerHTML = `<div class="fb-banner fb-schedule" data-act="forecast-jump" title="Click to see full forecast on Money tab">
         <div class="fb-head">
           <span class="fb-head-title">Upcoming posts</span>
@@ -2591,30 +3014,39 @@ async function renderForecastBanner() {
       });
       return;
     }
-    const totalCents = upcoming.reduce((acc, s) => acc + (s.occupied_fee_cents || 0), 0);
     const fmtWeek = ws => {
       const d = new Date(ws + 'T00:00:00Z');
       return 'wk of ' + d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
     };
-    const rowsHtml = upcoming.map(s => {
-      const isProjected = !!s.projected;
+    const rowHtml = (s, isProjected) => {
       const brandRaw = (s.occupied_by || '').replace(' (projected)', '');
       const dealId = s.occupied_deal_id || s.projected_deal_id || '';
-      const tag = isProjected
-        ? `<span class="fb-row-tag fb-tag-projected">projected</span>`
-        : `<span class="fb-row-tag fb-tag-confirmed">booked</span>`;
-      return `<div class="fb-row" data-act="jump-deal" data-deal="${escapeHtml(dealId)}">
-        <span class="fb-row-brand">${escapeHtml(brandRaw)}${tag}</span>
+      return `<div class="fb-row${isProjected ? ' fb-row-projected' : ''}" data-act="jump-deal" data-deal="${escapeHtml(dealId)}">
+        <span class="fb-row-brand">${escapeHtml(brandRaw)}</span>
         <span class="fb-row-fee">${usd(s.occupied_fee_cents)}</span>
         <span class="fb-row-date">${fmtWeek(s.week_start)}</span>
       </div>`;
-    }).join('');
-    host.innerHTML = `<div class="fb-banner fb-schedule">
+    };
+    const bookedTotal    = booked.reduce((a, s) => a + (s.occupied_fee_cents || 0), 0);
+    const projectedTotal = projected.reduce((a, s) => a + (s.occupied_fee_cents || 0), 0);
+    // Booked section — only render when there are actual locked posts.
+    const bookedSection = booked.length ? `
       <div class="fb-head">
-        <span class="fb-head-title">Upcoming posts · next ${upcoming.length}</span>
-        <span class="fb-head-total">${usd(totalCents)}<small>on the schedule</small></span>
+        <span class="fb-head-title">Upcoming posts · ${booked.length} booked</span>
+        <span class="fb-head-total">${usd(bookedTotal)}<small>locked</small></span>
       </div>
-      ${rowsHtml}
+      ${booked.map(s => rowHtml(s, false)).join('')}` : '';
+    // Projection section — visually dimmer with explicit "if you close these" framing
+    const projectedSection = projected.length ? `
+      <div class="fb-head fb-head-projected">
+        <span class="fb-head-title">If you close these · ${projected.length} projected</span>
+        <span class="fb-head-total">${usd(projectedTotal)}<small>potential</small></span>
+      </div>
+      ${projected.map(s => rowHtml(s, true)).join('')}` : '';
+    host.innerHTML = `<div class="fb-banner fb-schedule">
+      ${bookedSection}
+      ${booked.length && projected.length ? '<div class="fb-divider"></div>' : ''}
+      ${projectedSection}
       <div class="fb-foot" data-act="forecast-jump">
         <span>Full 90d forecast on Money tab</span>
         <span class="fb-foot-cta">FORECAST →</span>
@@ -2623,15 +3055,9 @@ async function renderForecastBanner() {
     host.querySelector('[data-act="forecast-jump"]')?.addEventListener('click', () => {
       document.querySelector('#nav button[data-g="money"]')?.click();
     });
-    host.querySelectorAll('[data-act="jump-deal"]').forEach(el => {
-      el.addEventListener('click', () => {
-        const id = el.dataset.deal;
-        if (!id) return;
-        // Try to expand the deal pill in-place if it's on Today
-        const pill = document.querySelector(`[data-deal-id="${id}"]`);
-        if (pill) { pill.scrollIntoView({behavior:'smooth', block:'center'}); pill.click(); }
-      });
-    });
+    // Row clicks handled by the module-level document delegation defined
+    // near PINNED_SCHEDULE. Don't re-attach per-row listeners here — they
+    // double-fire with the delegated handler and toggle the pill closed.
   } catch {
     host.innerHTML = '';
   }
@@ -3069,12 +3495,14 @@ async function renderTodayFeed() {
   // Bail out — saves API calls. Re-enable by removing display:none from #todayFeed.
   if (!feed || feed.style.display === 'none') return;
   feed.classList.add('pill-feed');
+  const _gen = window.CREATOR_GEN;
 
   const [open, won, dormant] = await Promise.all([
     api('/api/deals?state=open&limit=200' + qsAmp()),
     api('/api/deals?state=won&limit=200' + qsAmp()),
     api('/api/deals?state=dormant&limit=100' + qsAmp()),
   ]);
+  if (_gen !== window.CREATOR_GEN) return;  // creator switched mid-fetch
   let all = [...open, ...won, ...dormant]
     .filter(d => ACTIVE_STAGES.includes(d.funnel_stage) && d.funnel_stage !== 'completed');
   if (STAGE_FILTER === 'nudge') {
@@ -3307,12 +3735,13 @@ async function loadPillBody(pillEl, opts = {}) {
   const dealId = opts.dealId || pillEl.dataset.deal;
   const body = opts.bodyEl || pillEl.querySelector('.body-content');
   try {
-    let [deal, sum, latest, atts, conv] = await Promise.all([
+    let [deal, sum, latest, atts, conv, lifecycle] = await Promise.all([
       api(`/api/deals/${dealId}`),
       api(`/api/deals/${dealId}/summary`).catch(() => null),
       api(`/api/messages/latest?deals=${dealId}`).then(arr => arr[0] || null).catch(() => null),
       api(`/api/deals/${dealId}/attachments`).catch(() => ({ attachments:[], contracts:[] })),
       api(`/api/deals/${dealId}/conversation?limit=8`).catch(() => ({ messages:[] })),
+      api(`/api/deals/${dealId}/lifecycle`).catch(() => ({ steps: [] })),
     ]);
     // Self-heal: if the brand body is empty (bulk sync only got headers), force
     // a per-thread refresh so we have real content to show. Falls through silently
@@ -3408,12 +3837,14 @@ async function loadPillBody(pillEl, opts = {}) {
         const color = fit.score >= 7 ? '#9fd0b0' : fit.score >= 4 ? 'var(--amber)' : 'var(--red)';
         const bg    = fit.score >= 7 ? 'rgba(159,208,176,.08)' : fit.score >= 4 ? 'rgba(226,169,78,.08)' : 'rgba(226,99,92,.08)';
         const verdictLabel = ({strong:'Strong push', fair:'Worth pursuing', weak:'Lukewarm', 'walk-away':'Walk away'})[fit.verdict] || '';
-        fitBlock = `<div style="background:${bg};border:1px solid ${color};border-radius:9px;padding:11px 13px;margin-top:4px">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-            <span style="font-size:18px;font-weight:800;color:${color};font-variant-numeric:tabular-nums">${fit.score}<span style="font-size:11px;font-weight:600;color:var(--cream-faint)">/10</span></span>
-            <span style="color:${color};font-weight:800;letter-spacing:.005em;font-size:13px">${verdictLabel}</span>
-          </div>
-          ${(fit.reasons||[]).slice(0,4).map(r => `<div style="font-size:11.5px;color:var(--cream-dim);line-height:1.5">${escapeHtml(r)}</div>`).join('')}
+        // Compact one-line fit block — score chip + verdict + reasons inline,
+        // no big colored box. Reasons join with thin dot separators so the whole
+        // thing reads as a single sentence the eye scans in one beat.
+        const reasonsHtml = (fit.reasons || []).slice(0, 3).map(r => escapeHtml(r)).join(' · ');
+        fitBlock = `<div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:${bg};border:1px solid ${color};border-radius:7px;margin-top:4px;font-size:12px;line-height:1.4;flex-wrap:wrap">
+          <span style="font-size:13px;font-weight:800;color:${color};font-variant-numeric:tabular-nums;flex:0 0 auto">${fit.score}<span style="font-size:10.5px;font-weight:600;color:${color};opacity:.65">/10</span></span>
+          <span style="color:${color};font-weight:800;font-size:12px;flex:0 0 auto">${verdictLabel}</span>
+          ${reasonsHtml ? `<span style="color:#6B6B70;flex:1;min-width:0">· ${reasonsHtml}</span>` : ''}
         </div>`;
       }
     } catch {}
@@ -3503,15 +3934,38 @@ async function loadPillBody(pillEl, opts = {}) {
         snapshotBlock = `<div class="tw-snapshot">${didLine}${nowLine}${nextLine}</div>`;
       }
     }
+    // Build the full pipeline block from the AI-grounded lifecycle steps.
+    // CSS visibility is controlled by .show-pipeline on the parent .tw-deal,
+    // so the block is in the DOM but hidden until Riley taps the toggle.
+    const steps = lifecycle?.steps || [];
+    let pipelineMeta2 = pipelineMeta;
+    if (!pipelineMeta2 && steps.length > 1) {
+      const doneN = steps.filter(s => s.completed || s.status === 'done').length;
+      pipelineMeta2 = `${doneN}/${steps.length} done`;
+    }
+    const pipelineBlock = steps.length ? `<div class="tw-pipeline-block"><div class="tw-actions">${
+      steps.map(s => {
+        const status = s.status || (s.completed ? 'done' : 'todo');
+        const icon = status === 'done' ? '✓' : status === 'active' ? '●' : status === 'waiting' ? '⏳' : '○';
+        const dateChip = s.date_label ? `<span class="tw-when">${escapeHtml(s.date_label)}</span>` : '';
+        const detail = s.detail ? `<div class="tw-detail">${escapeHtml(s.detail)}</div>` : '';
+        return `<div class="tw-action status-${status}">
+          <span class="tw-dot">${icon}</span>
+          <div class="tw-label"><b>${escapeHtml(s.label || '')}</b>${detail}</div>
+          ${dateChip}
+        </div>`;
+      }).join('')
+    }</div>${lifecycle?.lifecycle_audited_at ? `<div class="tw-pipeline-foot">AI-grounded from your conversations · audited ${escapeHtml(timeAgo(lifecycle.lifecycle_audited_at) || '')}</div>` : ''}</div>` : '';
     body.innerHTML = `
       ${snapshotBlock}
       ${fitBlock ? `<div class="lbl" style="color:#9fd0b0">🎯 Fit score</div>${fitBlock}` : ''}
       ${negBlock}
       <button class="tw-section-btn" data-sec="pipeline" type="button">
         <span>📋 Show full pipeline</span>
-        <span class="tw-section-meta">${pipelineMeta}</span>
+        <span class="tw-section-meta">${pipelineMeta2}</span>
         <span class="tw-section-arr">›</span>
       </button>
+      ${pipelineBlock}
       <button class="tw-section-btn" data-sec="detail" type="button">
         <span>💬 Summary &amp; conversation</span>
         <span class="tw-section-arr">›</span>
@@ -3707,7 +4161,7 @@ async function renderActiveDeals() {
 let CURRENT_BW = null;
 const bwBack = () => document.getElementById('bwBack');
 
-async function openBrandWaModal(dealId) {
+async function openBrandWaModal(dealId, opts = {}) {
   const back = bwBack();
   back.classList.add('open');
   document.getElementById('bwTitle').textContent = 'Loading…';
@@ -3717,12 +4171,28 @@ async function openBrandWaModal(dealId) {
   document.getElementById('bwStatus').textContent = '';
   // Also kick a fresh WhatsApp sync so the chat is current
   try { await api('/api/sync/whatsapp', { method:'POST' }); } catch {}
+  // Posture chip step — same as email cook. Riley picks a direction first,
+  // the WA reply gets drafted from there.
+  let postureId = opts.posture_id || null;
+  if (!postureId) {
+    try {
+      const p = await api(`/api/draft-postures/${dealId}`);
+      const postures = (p?.postures || []).slice(0, 4);
+      if (postures.length >= 2) {
+        // Repurpose the email modal's pickPosture, but target the WA modal.
+        postureId = await pickPostureForModal(postures, 'bwTitle', 'bwMeta', 'bwHistory', bwBack);
+        if (postureId === null) { back.classList.remove('open'); return; }
+      } else if (postures.length === 1) {
+        postureId = postures[0].id;
+      }
+    } catch {}
+  }
   try {
     const r = await api('/api/brand-wa-draft', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ deal_id: dealId })
+      body: JSON.stringify({ deal_id: dealId, posture_id: postureId })
     });
-    CURRENT_BW = r;
+    CURRENT_BW = { ...r, posture_id: postureId, cooked_body: r.body };
     document.getElementById('bwTitle').textContent = `Reply to ${r.contact_name || r.deal.brand} · ${r.deal.brand}`;
     const lastBrand = r.last_brand_at ? `brand last sent ${timeAgo(r.last_brand_at)}` : 'no recent brand message';
     document.getElementById('bwMeta').innerHTML = `${r.deal.fee_cents ? '$'+(r.deal.fee_cents/100).toLocaleString()+' · ' : ''}WhatsApp chat: <b>${escapeHtml(r.chat_name)}</b> · ${lastBrand}`;
@@ -3746,11 +4216,14 @@ document.getElementById('bwRewrite').onclick = async () => {
   const btn = document.getElementById('bwRewrite');
   btn.textContent = '↺ Rewriting…'; btn.disabled = true;
   try {
+    // Reuse the originally-picked posture on rewrite — Riley's edits become
+    // learning signal via cook-edits log, posture stays constant.
     const r = await api('/api/brand-wa-draft', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ deal_id: CURRENT_BW.deal.id, force_new: true })
+      body: JSON.stringify({ deal_id: CURRENT_BW.deal.id, force_new: true, posture_id: CURRENT_BW.posture_id || null })
     });
     document.getElementById('bwBody').value = r.body || '';
+    CURRENT_BW.cooked_body = r.body;  // baseline for next edit-diff
     btn.textContent = '↺ Rewrite'; btn.disabled = false;
   } catch { btn.textContent = '↺ Rewrite'; btn.disabled = false; }
 };
@@ -3788,6 +4261,19 @@ document.getElementById('bwSend').onclick = async () => {
       body: JSON.stringify({ chat_name: CURRENT_BW.chat_name, text, deal_id: CURRENT_BW.deal.id })
     });
     if (!r.ok) throw new Error(r.reason || 'send failed');
+    // Edit-diff learning log — fire-and-forget after a successful send.
+    if (CURRENT_BW.cooked_body && CURRENT_BW.cooked_body !== text) {
+      api('/api/cook-edits', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          deal_id: CURRENT_BW.deal.id,
+          posture_id: CURRENT_BW.posture_id || null,
+          channel: 'whatsapp',
+          cooked_body: CURRENT_BW.cooked_body,
+          sent_body: text,
+        })
+      }).catch(() => {});
+    }
     status.innerHTML = `<span style="color:var(--green)">✓ Sent to ${escapeHtml(CURRENT_BW.chat_name)}</span>`;
     btn.textContent = '✓ Sent'; btn.style.background = 'var(--green)';
     setTimeout(() => {
@@ -3900,40 +4386,141 @@ document.getElementById('wmSendNow').onclick = async () => {
 };
 
 // --- VOICE UPDATE PER-CARD (opens Tell-the-desk pre-filled with deal context) -
-function openVoiceForDeal(dealId) {
-  // Reuse the quick-capture FAB. Pre-fill with deal context so AI can scope.
+async function openVoiceForDeal(dealId) {
+  // Brian's deals live offline — most of his work happens on phone calls + in
+  // person, NOT email or WA. For those, skip the quick-capture intent router
+  // and open a direct "log this conversation" prompt that appends straight to
+  // the deal's thread as a manual message. The lifecycle + summary engines
+  // then pick it up like any real inbound on the next pass.
+  let deal = null;
+  try { deal = await api('/api/deals/' + dealId); } catch {}
+  const isBrian = deal?.creator_id === 'brian';
+  if (isBrian) {
+    const brand = deal?.brand || 'this deal';
+    const text = prompt(
+      `🎙️ Log a conversation with ${brand}\n\n` +
+      `Dictate what was discussed (use your phone's mic). Default direction:\n` +
+      `BRAND → US. Prefix with "We told them: " to log an outbound message.`,
+      ''
+    );
+    if (text === null) return;
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    // Detect "We told them: ..." / "Riley said: ..." prefix → outbound
+    const outboundPrefix = /^(?:we (?:told them|said)|riley(?:\s+said)?|i (?:said|told them|told him|told her))\b[\s:,-]+/i;
+    const fromUs = outboundPrefix.test(trimmed);
+    const cleanText = trimmed.replace(outboundPrefix, '').trim() || trimmed;
+    try {
+      await api(`/api/deals/${dealId}/log-conversation`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: cleanText, from_us: fromUs }),
+      });
+      // Re-render so the new bubble shows up in the conversation block.
+      if (typeof refreshAll === 'function') refreshAll();
+    } catch (e) {
+      alert('Could not log: ' + (e.message || 'error'));
+    }
+    return;
+  }
+  // Cooper / Charlie — keep existing quick-capture FAB flow (intent routing,
+  // can fire "Tell Cooper X" → drafts a WA message back, etc).
   const qcb = document.getElementById('qcback');
   qcb.classList.add('open');
   const inp = document.getElementById('qcinput');
-  api('/api/deals/' + dealId).then(d => {
-    inp.value = `${d.brand}: `;
-    inp.focus();
-    inp.setSelectionRange(inp.value.length, inp.value.length);
-  });
+  inp.value = `${deal?.brand || ''}: `;
+  inp.focus();
+  inp.setSelectionRange(inp.value.length, inp.value.length);
 }
 
 // --- DRAFT REPLY MODAL -------------------------------------------------------
 const dmBack = () => document.getElementById('dmBack');
 let CURRENT_DRAFT = null;
 
+// Generic posture chip selector reused by both email + WA cook modals.
+// Targets the title/meta/host elements by id so each channel renders the
+// chips inside its own modal shell.
+function pickPostureForModal(postures, titleId, metaId, hostId, backGetter) {
+  return new Promise((resolve) => {
+    const titleEl = document.getElementById(titleId);
+    const metaEl  = document.getElementById(metaId);
+    const hostEl  = document.getElementById(hostId);
+    if (titleEl) titleEl.textContent = '🧭 Pick a direction';
+    if (metaEl)  metaEl.textContent  = `${postures.length} strategic plays — click one and the AI will draft from there. Same posture is reused on Rewrite.`;
+    const chipsHtml = postures.map(p => `
+      <button class="posture-chip${p.recommended ? ' recommended' : ''}" data-pid="${escapeHtml(p.id)}">
+        <span class="posture-chip-l">
+          <span class="posture-chip-label">${escapeHtml(p.label)}</span>
+          ${p.recommended ? '<span class="posture-chip-tag">rec</span>' : ''}
+        </span>
+        <span class="posture-chip-hint">${escapeHtml(p.hint || '')}</span>
+      </button>`).join('');
+    // Add .posture-mode so the host's own background/padding/max-height get
+    // stripped — chips render tight, edge-to-edge.
+    hostEl.classList.add('posture-mode');
+    hostEl.innerHTML = `<div class="posture-chips">${chipsHtml}</div>`;
+    hostEl.querySelectorAll('.posture-chip').forEach(b => {
+      b.onclick = () => {
+        hostEl.classList.remove('posture-mode');
+        hostEl.innerHTML = '';
+        resolve(b.dataset.pid);
+      };
+    });
+    // X-out before picking → resolve null so caller aborts cleanly.
+    const back = backGetter();
+    const backId = back?.id;
+    if (backId) {
+      back.addEventListener('click', e => {
+        if (e.target.id === backId) {
+          hostEl.classList.remove('posture-mode');
+          hostEl.innerHTML = '';
+          resolve(null);
+        }
+      }, { once: true });
+    }
+  });
+}
+// Backwards-compat wrapper used by openDraftModal.
+function pickPosture(dealId, postures) {
+  return pickPostureForModal(postures, 'dmBrand', 'dmMeta', 'dmBrandMsg', dmBack);
+}
+
 async function openDraftModal(dealId, opts = {}) {
   const back = dmBack();
   back.classList.add('open');
   document.getElementById('dmBrand').textContent = 'Loading…';
-  document.getElementById('dmMeta').textContent = (opts.mode === 'nudge')
-    ? '⚡ Cooking a nudge — polite follow-up to wake up a quiet thread…'
-    : '⚡ Pulling fresh Gmail for this thread…';
+  document.getElementById('dmMeta').textContent = '⚡ Reading the deal to find your strategic options…';
   document.getElementById('dmBrandMsg').textContent = '';
   document.getElementById('dmBody').value = '';
   document.getElementById('dmStatus').textContent = '';
   document.getElementById('dmRationale').textContent = '';
 
+  // Posture chip step — fetch options, show chips if 2+, otherwise auto-cook.
+  // A posture is a strategic direction Riley picks ("push for higher", "accept
+  // and lock", etc); the AI then drafts in that direction.
+  let postureId = opts.posture_id || null;
+  if (!postureId) {
+    try {
+      const p = await api(`/api/draft-postures/${dealId}`);
+      const postures = (p?.postures || []).slice(0, 4);
+      if (postures.length >= 2) {
+        postureId = await pickPosture(dealId, postures);
+        if (postureId === null) { closeDraftModal(); return; }  // canceled
+      } else if (postures.length === 1) {
+        postureId = postures[0].id;
+      }
+    } catch { /* posture fetch failed, fall through to default cook */ }
+  }
+  document.getElementById('dmMeta').textContent = (opts.mode === 'nudge')
+    ? '⚡ Cooking a nudge with your chosen posture…'
+    : '⚡ Cooking with your chosen posture…';
+
   try {
     const r = await api('/api/draft-with-context', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ deal_id: dealId, mode: opts.mode || 'reply' })
+      body: JSON.stringify({ deal_id: dealId, mode: opts.mode || 'reply', posture_id: postureId })
     });
-    CURRENT_DRAFT = { deal: r.deal, draft: r.draft, latest: r.latest_message };
+    CURRENT_DRAFT = { deal: r.deal, draft: r.draft, latest: r.latest_message, posture_id: postureId, cooked_body: r.draft.body };
     const pullNote = r.gmail_pull?.ok
       ? `· ✓ Fresh from Gmail (${r.gmail_pull.fetched || 0} msgs in thread, last by ${r.gmail_pull.last_by || '?'})`
       : (r.gmail_pull ? '· ⚠ Could not refresh from Gmail' : '');
@@ -3973,11 +4560,17 @@ document.getElementById('dmRewrite').onclick = async () => {
   const btn = document.getElementById('dmRewrite');
   btn.textContent = '↺ Rewriting…'; btn.disabled = true;
   try {
+    // Reuse the originally-picked posture on rewrite so Riley doesn't have to
+    // re-pick. Edits on the rewrite become learning signal via cook-edits log.
     const r = await api('/api/draft-with-context', {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({ deal_id: CURRENT_DRAFT.deal.id, force_new: true })
+      body: JSON.stringify({ deal_id: CURRENT_DRAFT.deal.id, force_new: true, posture_id: CURRENT_DRAFT.posture_id || null })
     });
     CURRENT_DRAFT.draft = r.draft;
+    // Update cached cooked_body so edit-diff capture reflects the LATEST
+    // rewrite (not the original cook). Compare-to-baseline must be the body
+    // Riley actually saw before editing.
+    CURRENT_DRAFT.cooked_body = r.draft.body;
     document.getElementById('dmBody').value = r.draft.body || '';
     document.getElementById('dmRationale').textContent = r.draft.rationale || '';
     btn.textContent = '↺ Rewrite'; btn.disabled = false;
@@ -3989,6 +4582,90 @@ document.getElementById('dmRewrite').onclick = async () => {
 document.getElementById('dmOpen').onclick = () => {
   if (!CURRENT_DRAFT) return;
   openInGmail(CURRENT_DRAFT.deal.id);
+};
+
+// Schedule button — queues this draft for a future fire time instead of sending
+// now. Default is computed from current day so Sunday cooks default to "Sun 8pm"
+// (lands Monday morning) and weekend cooks default to "Monday 9am".
+function smartScheduleDefault(now = new Date()) {
+  const d = new Date(now);
+  const day = d.getDay();          // 0=Sun … 6=Sat
+  const hour = d.getHours();
+  // Saturday — default Monday 9am (don't pile up brand emails on Sunday inboxes).
+  if (day === 6) {
+    const target = new Date(d); target.setDate(d.getDate() + 2); target.setHours(9, 0, 0, 0);
+    return target;
+  }
+  // Sunday before 5pm — push to Sunday 8pm so it lands Mon morning.
+  if (day === 0 && hour < 17) {
+    const target = new Date(d); target.setHours(20, 0, 0, 0);
+    return target;
+  }
+  // Sunday 5pm–11pm — Riley's already cooking for Monday; default 8pm tonight.
+  if (day === 0 && hour >= 17 && hour < 23) {
+    const target = new Date(d); target.setHours(Math.max(20, hour + 1), 0, 0, 0);
+    return target;
+  }
+  // Weekday after 7pm — schedule tomorrow 9am so the brand sees it first thing.
+  if (hour >= 19) {
+    const target = new Date(d); target.setDate(d.getDate() + 1); target.setHours(9, 0, 0, 0);
+    return target;
+  }
+  // Weekday business hours — 30 min from now is the default suggestion.
+  const target = new Date(d.getTime() + 30 * 60000);
+  return target;
+}
+function formatScheduleLabel(when) {
+  const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const sameDay = (a, b) => a.toDateString() === b.toDateString();
+  const now = new Date();
+  const tomorrow = new Date(); tomorrow.setDate(now.getDate() + 1);
+  const dayLabel = sameDay(when, now) ? 'today' : sameDay(when, tomorrow) ? 'tomorrow' : days[when.getDay()];
+  const h = when.getHours() % 12 || 12;
+  const ampm = when.getHours() >= 12 ? 'pm' : 'am';
+  return `${dayLabel} ${h}${when.getMinutes() ? ':'+String(when.getMinutes()).padStart(2,'0') : ''}${ampm}`;
+}
+document.getElementById('dmSchedule').onclick = async () => {
+  if (!CURRENT_DRAFT) return;
+  const status = document.getElementById('dmStatus');
+  const editedBody = document.getElementById('dmBody').value.trim();
+  if (!editedBody) { status.textContent = 'Body is empty.'; return; }
+  const defaultWhen = smartScheduleDefault();
+  // Prompt for a custom datetime — pre-filled with the smart default. ISO-ish
+  // format the browser's <input type=datetime-local> would use. If Riley just
+  // hits enter, the default is used.
+  const pad = n => String(n).padStart(2, '0');
+  const localISO = `${defaultWhen.getFullYear()}-${pad(defaultWhen.getMonth()+1)}-${pad(defaultWhen.getDate())}T${pad(defaultWhen.getHours())}:${pad(defaultWhen.getMinutes())}`;
+  const answer = prompt(
+    `Schedule send for? (default: ${formatScheduleLabel(defaultWhen)})\n\n` +
+    `Format: YYYY-MM-DDTHH:MM (24h, local time) or hit Enter for default.`,
+    localISO
+  );
+  if (answer === null) return; // canceled
+  const when = answer.trim() ? new Date(answer) : defaultWhen;
+  if (isNaN(when.getTime())) { status.innerHTML = `<span style="color:var(--red)">✗ Invalid date</span>`; return; }
+  const btn = document.getElementById('dmSchedule');
+  btn.textContent = '📤 Scheduling…'; btn.disabled = true; status.textContent = '';
+  try {
+    const r = await api('/api/scheduled-sends', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        deal_id: CURRENT_DRAFT.deal.id,
+        draft_id: CURRENT_DRAFT.draft.id,
+        thread_id: CURRENT_DRAFT.draft.thread_id,
+        channel: CURRENT_DRAFT.draft.channel || 'email',
+        body: editedBody,
+        scheduled_for: when.toISOString(),
+      })
+    });
+    if (!r.ok) throw new Error(r.error || 'Schedule failed');
+    status.innerHTML = `<span style="color:var(--green)">✓ Scheduled for ${formatScheduleLabel(when)}</span>`;
+    btn.textContent = '✓ Scheduled';
+    setTimeout(() => { closeDraftModal(); btn.textContent='📤 Schedule'; btn.disabled=false; refreshAll(); }, 1400);
+  } catch (e) {
+    status.innerHTML = `<span style="color:var(--red)">✗ ${escapeHtml(e.message)}</span>`;
+    btn.textContent = '📤 Schedule'; btn.disabled = false;
+  }
 };
 
 document.getElementById('dmSend').onclick = async () => {
@@ -4005,6 +4682,21 @@ document.getElementById('dmSend').onclick = async () => {
       body: JSON.stringify({ body: editedBody })
     });
     if (!r.ok) throw new Error(r.error || 'Send failed');
+    // Learning loop — log (cook, edits, sent) so we can mine Riley's edit
+    // patterns later and tune the cook prompt. Fire-and-forget; sending
+    // already succeeded so don't fail the UX on a logging error.
+    if (CURRENT_DRAFT.cooked_body && CURRENT_DRAFT.cooked_body !== editedBody) {
+      api('/api/cook-edits', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+          deal_id: CURRENT_DRAFT.deal.id,
+          posture_id: CURRENT_DRAFT.posture_id || null,
+          channel: CURRENT_DRAFT.draft.channel || 'email',
+          cooked_body: CURRENT_DRAFT.cooked_body,
+          sent_body: editedBody,
+        })
+      }).catch(() => {});
+    }
     status.innerHTML = `<span style="color:var(--green)">✓ Sent to ${escapeHtml(r.to || '')}</span>`;
     btn.textContent = '✓ Sent'; btn.style.background = 'var(--green)';
     setTimeout(() => { closeDraftModal(); btn.style.background='var(--gold)'; btn.textContent='✓ Approve & Send'; btn.disabled=false; refreshAll(); }, 1400);
@@ -4499,12 +5191,20 @@ function paintSwitcher() {
     c.classList.toggle('is-active', c.dataset.creator === CREATOR_FILTER);
   });
 }
+// CREATOR_GEN — bumped every creator switch. Per-creator render functions snapshot
+// it before they fetch, then check it before painting. If a switch happened mid-flight,
+// the stale result is dropped instead of overwriting the new creator's view.
+window.CREATOR_GEN = 0;
+window.getCreatorGen = () => window.CREATOR_GEN;
 function selectCreator(name, opts) {
   if (!name) return;
   const changed = name !== CREATOR_FILTER;
   CREATOR_FILTER = name;
   localStorage.setItem('triibe.creator', CREATOR_FILTER);
   paintSwitcher();
+  // Hide/show the WA daemon heartbeat in the sidebar — Brian's brand convos are
+  // over iMessage, so the WhatsApp daemon status is irrelevant on his pages.
+  try { renderWaHeartbeat(); } catch {}
   // Re-prefix the page title with the new creator's name (e.g. switching
   // from Cooper → Brian flips "Cooper's Pitches" → "Brian's Pitches").
   // Skip on the Creators index page since that's a creator-agnostic roster.
@@ -4513,7 +5213,24 @@ function selectCreator(name, opts) {
   if (titleEl && titleEl.dataset.baseTitle && activeNav !== 'creators') {
     titleEl.textContent = creatorPrefixed(titleEl.dataset.baseTitle);
   }
-  if (changed) refreshAll();
+  if (changed) {
+    // Bump the gen so any in-flight previous-creator render gets dropped.
+    window.CREATOR_GEN++;
+    // Instant visual reset — blank every per-creator container so the previous
+    // creator's deals/pitches don't linger on screen while the new fetch is in
+    // flight. Show a lightweight skeleton so the page doesn't feel empty.
+    const SKEL = `<div class="tip" style="margin:30px auto;text-align:center;opacity:.55">Loading ${name[0].toUpperCase()+name.slice(1)}'s desk…</div>`;
+    const PER_CREATOR_HOSTS = [
+      'forecastBanner','pipelineSnapshot','thisWeekTray','todayFeed',
+      'leadsTray','discoveryTray','pitchesTrayPage','moneyPulse',
+      'creatorChatPillLegacyMount',
+    ];
+    for (const id of PER_CREATOR_HOSTS) {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = id === 'thisWeekTray' || id === 'todayFeed' ? SKEL : '';
+    }
+    refreshAll();
+  }
   if (opts?.goToToday) document.querySelector('#nav button[data-g="today"]')?.click();
 }
 paintSwitcher();
@@ -4629,53 +5346,141 @@ async function renderParked() {
     <div class="park-list">${parked.map(p => {
       const overdue = p.days_until_revisit != null && p.days_until_revisit < 0;
       const feeHtml = p.fee_cents > 0 ? usd(p.fee_cents) : '';
-      // Pick the best conversation context, in priority order:
+      // Pick the best one-liner for the collapsed sub-line. Priority:
       //   1. ai_summary       → engine-distilled summary (best)
-      //   2. last_msg.text    → raw most-recent message body
-      //   3. next_action_detail → legacy platform note (the older deals migrated
-      //      from before the messages table existed have NO messages but DO have
-      //      a hand-written status note here, e.g. "Higgsfield PAUSED their IG
-      //      ad campaign per Volha — expected to resume soon")
-      let convoHtml = '';
+      //   2. last_msg.text    → raw most-recent message body, truncated
+      //   3. next_action_detail → legacy hand-written status note
+      let subLine = '';
+      let bodyConvo = '';
       if (p.ai_summary) {
-        convoHtml = `<div class="park-card-convo park-card-convo-ai">${escapeHtml(p.ai_summary)}</div>`;
+        subLine = p.ai_summary;
+        bodyConvo = `<div class="pp-status-lbl">Where we are</div>
+                     <div class="pp-status-text">${escapeHtml(p.ai_summary)}</div>`;
       } else if (p.last_msg?.text) {
         const fromLabel = p.last_msg.from === 'us' ? 'You wrote' : 'Brand wrote';
         const ageStr = p.last_msg.sent_at ? ` · ${new Date(p.last_msg.sent_at).toLocaleDateString('en-US',{month:'short',day:'numeric'})}` : '';
-        convoHtml = `<div class="park-card-convo">
-          <span class="park-card-convo-tag">${escapeHtml(fromLabel)}${ageStr}</span>
-          ${escapeHtml(p.last_msg.text)}
-        </div>`;
+        subLine = p.last_msg.text;
+        bodyConvo = `<div class="pp-status-lbl">${escapeHtml(fromLabel)}${ageStr}</div>
+                     <div class="pp-status-text">${escapeHtml(p.last_msg.text)}</div>`;
       } else if (p.next_action_detail) {
-        convoHtml = `<div class="park-card-convo">
-          <span class="park-card-convo-tag">Last known status</span>
-          ${escapeHtml(p.next_action_detail)}
-        </div>`;
+        subLine = p.next_action_detail;
+        bodyConvo = `<div class="pp-status-lbl">Last known status</div>
+                     <div class="pp-status-text">${escapeHtml(p.next_action_detail)}</div>`;
       }
-      return `<div class="park-card${overdue ? ' park-overdue' : ''}" data-deal="${escapeHtml(p.id)}">
-        <div class="park-card-hdr">
-          <span class="park-card-brand">${escapeHtml(p.brand)}</span>
-          ${feeHtml ? `<span class="park-card-fee">${feeHtml}</span>` : ''}
-          <span class="park-card-when">${whenChip(p.days_until_revisit)}</span>
+      // Revisit chip — color-codes urgency. Overdue = red, <30d = amber, else dim.
+      const du = p.days_until_revisit;
+      const revisitClass = du == null ? 'none' : (du <= 30 ? 'soon' : '');
+      const creatorId = p.creator_id || 'cooper';
+      const creatorCap = creatorId[0].toUpperCase() + creatorId.slice(1);
+      const reNudged = !!p.already_renudged;
+      const nudgedAgo = reNudged && p.last_outbound_at
+        ? Math.floor((Date.now() - new Date(p.last_outbound_at).getTime()) / 86400_000)
+        : null;
+      const nudgedChip = reNudged
+        ? `<span class="pp-renudged" title="Already reached back out — waiting on brand">✓ Nudged${nudgedAgo != null ? ` ${nudgedAgo === 0 ? 'today' : nudgedAgo + 'd ago'}` : ''}</span>`
+        : '';
+      return `<div class="parked-pill${overdue ? ' park-overdue' : ''}${reNudged ? ' park-renudged' : ''}" data-deal="${escapeHtml(p.id)}">
+        <div class="pp-row">
+          <div class="pp-l">
+            <span class="tw-creator-pill ${creatorId}" style="font-size:10px;font-weight:800;letter-spacing:.06em;padding:3px 8px;border-radius:6px;text-transform:uppercase">${escapeHtml(creatorCap)}</span>
+            <span style="font-size:14.5px;font-weight:700;color:var(--cream);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;letter-spacing:-0.005em">${escapeHtml(p.brand)}</span>
+            ${nudgedChip}
+          </div>
+          <div class="pp-r">
+            ${feeHtml ? `<span class="pp-fee">${feeHtml}</span>` : ''}
+            <span class="pp-revisit ${revisitClass}">${whenChip(du)}</span>
+          </div>
         </div>
-        ${convoHtml}
-        ${p.park_reason ? `<div class="park-card-reason">📝 ${escapeHtml(p.park_reason)}</div>` : ''}
-        <div class="park-card-meta">Revisit ${labelDate(p.revisit_at)} · parked ${p.parked_at ? new Date(p.parked_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—'}</div>
-        <div class="park-card-acts">
-          <button class="primary" data-act="unpark" data-deal="${escapeHtml(p.id)}">Reach back out now</button>
-          <button data-act="reschedule" data-deal="${escapeHtml(p.id)}">Change date</button>
+        ${subLine ? `<div class="pp-sub">${escapeHtml(subLine)}</div>` : ''}
+        <div class="pp-body">
+          ${bodyConvo}
+          ${p.park_reason ? `<div class="pp-meta">📝 ${escapeHtml(p.park_reason)}</div>` : ''}
+          <div class="pp-meta">Revisit ${labelDate(p.revisit_at)} · parked ${p.parked_at ? new Date(p.parked_at).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '—'}</div>
+          <div class="pp-conv" data-conv-host="${escapeHtml(p.id)}">
+            <div class="pp-status-lbl">💬 Conversation history</div>
+            <div class="pp-conv-loading" style="font-size:12px;color:#7A7A82;padding:8px 0">Loading thread…</div>
+          </div>
+          <div class="pp-acts">
+            <button class="primary" data-act="unpark" data-deal="${escapeHtml(p.id)}">Reach back out now</button>
+            <button data-act="reschedule" data-deal="${escapeHtml(p.id)}">Change date</button>
+          </div>
         </div>
       </div>`;
     }).join('')}</div>`;
+    // Click on row/sub → toggle open. Buttons inside .pp-body handle their own
+    // clicks (and stop propagation so the toggle doesn't close mid-action).
+    host.querySelectorAll('.parked-pill').forEach(card => {
+      const onToggle = () => {
+        card.classList.toggle('open');
+        // Lazy-fetch conversation thread on first expand. The parked tray
+        // can have 20+ pills and pulling /api/deals/:id/conversation for all
+        // of them up-front would slam the DB. One-shot per pill is fine.
+        if (card.classList.contains('open') && !card.dataset.convLoaded) {
+          card.dataset.convLoaded = '1';
+          const convHost = card.querySelector('.pp-conv');
+          const dealId = convHost?.dataset.convHost;
+          if (dealId && convHost) {
+            api(`/api/deals/${dealId}/conversation?limit=20`).then(r => {
+              const msgs = r?.messages || [];
+              if (!msgs.length) {
+                // No thread to render — hide the section entirely instead of
+                // showing an awkward "No thread synced yet" placeholder.
+                // Manually-created deals (LinkedIn intros, call leads) often
+                // land here. The park reason + "Where we are" block above
+                // already give Riley the context he needs.
+                convHost.style.display = 'none';
+                return;
+              }
+              const fmtWhen = iso => {
+                if (!iso) return '';
+                const dt = new Date(iso);
+                const days = Math.floor((Date.now() - dt.getTime()) / 86400000);
+                if (days === 0) return 'today, ' + dt.toLocaleTimeString([],{hour:'numeric',minute:'2-digit'});
+                if (days === 1) return 'yesterday';
+                if (days < 7) return days + 'd ago';
+                return dt.toLocaleDateString([], { month:'short', day:'numeric' });
+              };
+              const bubbles = msgs.map(m => {
+                const who = m.from_us ? 'Riley' : ((m.sender || '').split('<')[0].trim().slice(0,30) || 'brand');
+                const when = fmtWhen(m.sent_at);
+                const body = (m.body || m.snippet || '').slice(0, 2000);
+                return `<div class="pp-conv-msg ${m.from_us ? 'us' : 'them'}">
+                  <div class="pp-conv-who">${escapeHtml(who)}${when ? ' · ' + when : ''}</div>
+                  <div class="pp-conv-bubble">${escapeHtml(body)}${(m.body || '').length > 2000 ? '\n…' : ''}</div>
+                </div>`;
+              }).join('');
+              convHost.innerHTML = `<div class="pp-status-lbl">💬 Conversation history (${msgs.length})</div>
+                <div class="pp-conv-log">${bubbles}</div>`;
+            }).catch(() => {
+              convHost.innerHTML = `<div class="pp-status-lbl">💬 Conversation history</div>
+                <div style="font-size:12px;color:#7A7A82;padding:6px 0">Couldn't load thread.</div>`;
+            });
+          }
+        }
+      };
+      card.querySelector('.pp-row')?.addEventListener('click', onToggle);
+      card.querySelector('.pp-sub')?.addEventListener('click', onToggle);
+    });
     host.querySelectorAll('[data-act="unpark"]').forEach(b => {
-      b.addEventListener('click', async () => {
+      b.addEventListener('click', async (e) => {
+        e.stopPropagation();
         const id = b.dataset.deal;
         await api(`/api/deals/${id}/unpark`, { method: 'POST' });
+        // The point of "Reach back out now" is to SEND a message, not to land
+        // on a list view. Silent rate-pitched deals (the most common parked
+        // type) don't appear in Close these deals or Today after unpark —
+        // they have no recent brand activity, so they fall through every
+        // tab's filter. Jumping to a list would dump Riley on whichever tab
+        // happens to be active, with no visible pill. Open the cook modal
+        // directly instead — posture chips fire, AI drafts a nudge, Riley
+        // edits + sends in one flow.
         renderParked();
+        setTimeout(() => openDraftModal(id, { mode: 'nudge' }), 150);
       });
     });
     host.querySelectorAll('[data-act="reschedule"]').forEach(b => {
-      b.addEventListener('click', () => {
+      b.addEventListener('click', (e) => {
+        e.stopPropagation();
         openParkModal(b.dataset.deal, { reschedule: true, onDone: renderParked });
       });
     });
@@ -5004,6 +5809,12 @@ async function renderInbox() {
   try {
     const closeHost = document.getElementById('pitchesCloseTray');
     if (closeHost) {
+      // Open-state preservation — if any pill in the Close-these-deals tray
+      // is currently open, skip the rebuild so Riley's reading/cook isn't
+      // wiped by the 30s refresh. Matches the same guard on Today's Work +
+      // renderThisWeek + renderTodaysWork. Next tick after he collapses
+      // catches up.
+      if (!closeHost.querySelector('.tw-deal.open')) {
       const tw = await api('/api/this-week?creator=' + currentCreator).catch(() => null);
       const pending = tw?.pending || [];
       if (pending.length) {
@@ -5024,6 +5835,7 @@ async function renderInbox() {
       } else {
         closeHost.innerHTML = '';
       }
+      }  // close the !closeHost.querySelector('.tw-deal.open') guard
     }
   } catch (e) { /* non-fatal */ }
 
@@ -5235,8 +6047,10 @@ async function renderInboxPitches() {
   const badge = document.getElementById('pitchesBadge');
   const headline = document.getElementById('pitchesHeadline');
   if (!host) return;
+  const _gen = window.CREATOR_GEN;
   try {
     const allPitches = await api('/api/inbox-pitches');
+    if (_gen !== window.CREATOR_GEN) return;
     const currentCreator = CREATOR_FILTER || 'cooper';
     // Unmatched/unknown pitches default to Cooper's view only (catch-all). Other
     // creator views show ONLY pitches explicitly tagged for that creator so
@@ -5357,7 +6171,17 @@ function renderPitchPill(p, currentCreator) {
   const ageStr = p.age_hours == null ? '' :
     p.age_hours < 24 ? `${p.age_hours}h` :
     `${Math.round(p.age_hours/24)}d`;
-  return `<div class="lead-pill pitch-pill" data-thread="${escapeHtml(p.thread_id)}" data-brand="${escapeHtml(p.brand)}" data-creator="${creatorGuess}" data-category="${p.category_guess || ''}">
+  // Exclusivity clash banner — Brian's Perfect Sport / Gymshark deals block
+  // any incoming pitch in the same category. Banner makes the conflict
+  // unmissable at a glance; click-through to create the deal still works in
+  // case Riley wants to override.
+  const clashBanner = p.exclusivity_clash ? `
+    <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;margin:0 0 8px;background:rgba(217,67,59,.14);border:1px solid rgba(217,67,59,.45);border-radius:8px;font-size:11.5px;color:#FFB8B3;font-weight:700">
+      <span style="font-size:14px">🚫</span>
+      <span><b>EXCLUSIVITY CLASH</b> with ${escapeHtml(p.exclusivity_clash.brand)} — ${escapeHtml(p.category_guess || 'same category')}</span>
+    </div>` : '';
+  return `<div class="lead-pill pitch-pill${p.exclusivity_clash ? ' has-clash' : ''}" data-thread="${escapeHtml(p.thread_id)}" data-brand="${escapeHtml(p.brand)}" data-creator="${creatorGuess}" data-category="${p.category_guess || ''}">
+    ${clashBanner}
     <div class="lp-row" style="cursor:pointer">
       <span class="lp-tag" style="background:rgba(127,168,217,.14);color:#7FA8D9">📨 PITCH</span>
       <div class="lp-brand">${escapeHtml(p.brand)}</div>
@@ -5384,6 +6208,199 @@ function renderPitchPill(p, currentCreator) {
       </div>
     </div>
   </div>`;
+}
+
+// =====================================================================
+// TODAY'S WORK — cross-creator action queue. Renders the mode-aware header
+// plus collapsible sections of items. Server-side detects the work mode and
+// orders/filters sections. Client just paints + wires the row click handlers.
+// =====================================================================
+async function renderTodaysWork() {
+  const host  = document.getElementById('todayworkTray');
+  const head  = document.getElementById('todayworkHeader');
+  const badge = document.getElementById('todayworkBadge');
+  if (!host) return;
+  // OPEN-STATE PRESERVATION: if any row is currently expanded, Riley is probably
+  // reading a thread or writing a cook reply. The 30s refresh would wipe the
+  // expanded body + the textarea content. Skip the re-render entirely — the
+  // next tick after he collapses the row will catch up. Trade: a new brand reply
+  // that lands won't surface until he closes what he's looking at, but that's
+  // far better than losing his place mid-cook.
+  if (host.querySelector('.tw-row.open')) return;
+  let data;
+  try { data = await api('/api/todays-work'); }
+  catch (e) { host.innerHTML = `<div class="tw-empty">Couldn't load — ${escapeHtml(e.message || 'error')}</div>`; return; }
+  if (!data || !Array.isArray(data.sections)) { host.innerHTML = `<div class="tw-empty">No data</div>`; return; }
+
+  // Sidebar badge — total actions. Hidden when 0 so we don't draw a dot for a clean queue.
+  const total = data.header?.total_actions || 0;
+  if (badge) badge.textContent = total ? String(total) : '';
+
+  // Mode header — the energy of the page. Tints by mode.
+  const h = data.header || {};
+  if (head) {
+    head.className = `tw-mode-header ${data.mode || ''}`;
+    head.innerHTML = `
+      <div class="tw-mh-l">
+        <div class="tw-mh-title">${escapeHtml(h.title || "Today's Work")}</div>
+        <div class="tw-mh-sub">${escapeHtml(h.subtitle || '')}</div>
+      </div>
+      <div class="tw-mh-r">
+        <div class="tw-mh-count">${total} action${total===1?'':'s'}</div>
+        <div class="tw-mh-time">${escapeHtml(h.time || '')}</div>
+      </div>`;
+  }
+
+  // Row click expands INLINE — no tab navigation. Brand-reply/owed/stale rows
+  // expand into a full deal-pill body (conversation, cook, send, attachments)
+  // via the existing loadPillBody engine that powers Today + Close-these-deals.
+  // Pitch rows expand into a compact "review + create / dismiss" panel using
+  // the same data shape /api/inbox-pitches returns.
+  const expandRow = async (row, item) => {
+    // Find or create the body slot below this row inside the same .tw-section-body
+    let body = row.nextElementSibling;
+    if (!body || !body.classList.contains('tw-row-body')) {
+      body = document.createElement('div');
+      body.className = 'tw-row-body';
+      row.parentElement.insertBefore(body, row.nextElementSibling);
+    }
+    const isOpen = row.classList.contains('open');
+    // Close any other open row in this section to keep the page calm.
+    row.parentElement.querySelectorAll('.tw-row.open').forEach(r => {
+      if (r !== row) {
+        r.classList.remove('open');
+        const b = r.nextElementSibling;
+        if (b && b.classList.contains('tw-row-body')) b.style.display = 'none';
+      }
+    });
+    if (isOpen) {
+      row.classList.remove('open');
+      body.style.display = 'none';
+      return;
+    }
+    row.classList.add('open');
+    body.style.display = 'block';
+    if (body.dataset.loaded === '1') return;  // already rendered
+
+    if (item.kind === 'pitch') {
+      // Lightweight pitch panel — full email body + Create/Dismiss buttons.
+      // Reuses the same /api/inbox-pitches data we already fetched server-side;
+      // here we fetch the single row to get cleaned subject/from/body.
+      body.innerHTML = `<div class="tw-row-loading">Loading…</div>`;
+      try {
+        const all = await api('/api/inbox-pitches');
+        const p = (all || []).find(x => x.thread_id === item.thread_id);
+        if (!p) { body.innerHTML = `<div class="tw-row-loading">Pitch was dismissed.</div>`; return; }
+        body.innerHTML = `
+          <div class="tw-pitch-panel">
+            <div class="tw-pp-row"><span class="tw-pp-lbl">Subject</span><div>${escapeHtml(p.subject || '(no subject)')}</div></div>
+            <div class="tw-pp-row"><span class="tw-pp-lbl">From</span><div>${escapeHtml(p.sender || '')}</div></div>
+            <div class="tw-pp-row"><span class="tw-pp-lbl">Body</span><div class="tw-pp-body">${escapeHtml(p.body || '(no body)')}</div></div>
+            <div class="tw-pp-acts">
+              <button class="primary" data-act="create">+ Create deal for ${escapeHtml((item.creator||'cooper')[0].toUpperCase()+(item.creator||'cooper').slice(1))}</button>
+              <button data-act="dismiss">Not interested</button>
+            </div>
+          </div>`;
+        body.querySelector('[data-act=create]').onclick = async (e) => {
+          e.stopPropagation();
+          const btn = e.currentTarget;
+          btn.disabled = true; btn.textContent = 'Creating…';
+          try {
+            await api(`/api/inbox-pitches/${encodeURIComponent(item.thread_id)}/promote`, {
+              method:'POST', headers:{'Content-Type':'application/json'},
+              body: JSON.stringify({ creator_id: item.creator, brand: p.brand, category: p.category_guess || null })
+            });
+            row.remove(); body.remove(); renderTodaysWork();
+          } catch (err) { alert('Create failed: '+err.message); btn.disabled=false; btn.textContent='+ Create deal'; }
+        };
+        body.querySelector('[data-act=dismiss]').onclick = async (e) => {
+          e.stopPropagation();
+          await api(`/api/inbox-pitches/${encodeURIComponent(item.thread_id)}/dismiss`, { method:'POST' });
+          row.remove(); body.remove();
+        };
+      } catch (err) { body.innerHTML = `<div class="tw-row-loading">Failed: ${escapeHtml(err.message)}</div>`; }
+      body.dataset.loaded = '1';
+      return;
+    }
+
+    // Deal-bound row — render the full deal pill body inline using the same
+    // loadPillBody engine that the Today + Close-these-deals pills use. This
+    // gives us the AI summary, full conversation, cook reply textarea, send,
+    // and attachments — all on this page without navigating.
+    //
+    // Wrapper class MUST be .tw-deal so that loadPillBody's section-toggle
+    // handlers (which walk up via .closest('.tw-deal')) can find the pill to
+    // toggle .show-pipeline / .show-detail. With .pill, "Summary & conversation"
+    // and "Show full pipeline" looked like dead buttons.
+    body.innerHTML = `
+      <div class="tw-deal tw-row-pill open show-detail" data-deal="${item.deal_id}" data-deal-id="${item.deal_id}">
+        <div class="body-content"><div class="tw-row-loading">Loading conversation…</div></div>
+      </div>`;
+    try {
+      const bodyEl = body.querySelector('.body-content');
+      await loadPillBody(null, { dealId: item.deal_id, bodyEl });
+    } catch (err) {
+      body.innerHTML = `<div class="tw-row-loading">Failed to load: ${escapeHtml(err.message || 'error')}</div>`;
+    }
+    body.dataset.loaded = '1';
+  };
+
+  const usd = c => c ? '$' + Math.round(c/100).toLocaleString() : '';
+  const ageStr = (ah) => {
+    if (ah == null) return '';
+    if (ah < 1) return 'just now';
+    if (ah < 24) return `${ah}h`;
+    return `${Math.round(ah/24)}d`;
+  };
+  const creatorPill = (id) => {
+    const cap = (id || '?').replace(/^./, c => c.toUpperCase());
+    return `<span class="tw-creator-pill ${id||''}">${cap}</span>`;
+  };
+
+  // Render sections. Empty sections get a one-line "all caught up" placeholder
+  // rather than being hidden — Riley can see the section labels at a glance.
+  const sectionHTML = data.sections.map(sec => {
+    const rows = sec.items.length
+      ? sec.items.map((it, i) => `
+          <div class="tw-row" data-sec="${sec.id}" data-idx="${i}">
+            ${creatorPill(it.creator)}
+            <div class="tw-brand">${escapeHtml(it.brand || '(no brand)')}</div>
+            <div class="tw-headline">${escapeHtml(it.headline || '')}</div>
+            <div class="tw-meta">
+              ${it.channel === 'wa' ? `<span class="tw-ch">💬</span>` : ''}
+              ${it.fee_cents ? `<span class="tw-fee">${usd(it.fee_cents)}</span>` : ''}
+              ${it.age_hours != null ? `<span>${ageStr(it.age_hours)}</span>` : ''}
+              ${it.due_date ? `<span>${escapeHtml(it.due_date)}</span>` : ''}
+            </div>
+          </div>`).join('')
+      : `<div class="tw-empty">All caught up here.</div>`;
+    return `
+      <div class="tw-section" data-sec="${sec.id}">
+        <div class="tw-section-head">
+          <span class="tw-emoji">${sec.emoji || '•'}</span>
+          <span class="tw-label">${escapeHtml(sec.label)}</span>
+          <span class="tw-line"></span>
+          <span class="tw-count">${sec.count}</span>
+          <span class="tw-caret">▾</span>
+        </div>
+        <div class="tw-section-body">${rows}</div>
+      </div>`;
+  }).join('');
+
+  host.innerHTML = sectionHTML || `<div class="tw-empty">All clear — no actions across any creator.</div>`;
+
+  // Wire collapse + row clicks
+  host.querySelectorAll('.tw-section').forEach(sec => {
+    sec.querySelector('.tw-section-head').onclick = () => sec.classList.toggle('collapsed');
+  });
+  host.querySelectorAll('.tw-row').forEach(row => {
+    const secId = row.dataset.sec;
+    const idx = Number(row.dataset.idx);
+    const section = data.sections.find(s => s.id === secId);
+    const item = section?.items[idx];
+    if (!item) return;
+    row.onclick = (e) => { e.stopPropagation(); expandRow(row, item); };
+  });
 }
 
 async function renderDiscovery() {
@@ -5877,9 +6894,11 @@ async function renderMoneyPulse() {
   const meterHost = document.getElementById('moneyPulse');
   const chaseHost = document.getElementById('chaseTray');
   if (!meterHost) return;
+  const _gen = window.CREATOR_GEN;
   try {
     const creator = CREATOR_FILTER || 'cooper';
     const d = await api(`/api/money-pulse?creator=${creator}`);
+    if (_gen !== window.CREATOR_GEN) return;
     if (!d || d.error) { meterHost.innerHTML=''; if (chaseHost) chaseHost.innerHTML=''; return; }
 
     const usd = (c) => '$' + Math.round((c || 0) / 100).toLocaleString();
@@ -5947,9 +6966,11 @@ async function renderMoneyPulse() {
 async function renderPipelineSnapshot() {
   const host = document.getElementById('pipelineSnapshot');
   if (!host) return;
+  const _gen = window.CREATOR_GEN;
   try {
     const creator = CREATOR_FILTER || 'cooper';
     const s = await api(`/api/pipeline-snapshot?creator=${creator}`);
+    if (_gen !== window.CREATOR_GEN) return;
     if (!s || s.error) { host.innerHTML = ''; return; }
     const usd = (c) => '$' + Math.round((c || 0) / 100).toLocaleString();
     const cap = creator[0].toUpperCase() + creator.slice(1);
@@ -5969,6 +6990,12 @@ async function renderPipelineSnapshot() {
 async function renderThisWeek() {
   const host = document.getElementById('thisWeekTray');
   if (!host) return;
+  // OPEN-STATE PRESERVATION (matches Today's Work + Parked pattern). If any
+  // pill is currently open, skip the entire re-render — Riley is probably
+  // reading the conversation or mid-cook, and even a perfect snapshot/restore
+  // causes a visual flicker + can drop scroll position + drop in-flight cook
+  // textareas. The next 30s tick after he collapses will catch up.
+  if (host.querySelector('.tw-deal.open')) return;
   // SNAPSHOT which pills are currently open + which deals have already loaded
   // their body content. Auto-refresh runs every 30s and re-renders the whole
   // tray — without this snapshot, every pill collapses mid-interaction.
@@ -5981,8 +7008,10 @@ async function renderThisWeek() {
     const body = d.querySelector('.tw-deal-body');
     if (body) openScroll[d.dataset.deal] = body.scrollTop;
   });
+  const _gen = window.CREATOR_GEN;
   try {
     const data = await api('/api/this-week?creator=' + (CREATOR_FILTER || 'cooper'));
+    if (_gen !== window.CREATOR_GEN) return;
     const confirmed = data.deals || [];
     const pending = data.pending || [];
     if (!confirmed.length && !pending.length) { host.innerHTML = ''; return; }
@@ -6108,6 +7137,8 @@ function wireThisWeekPills(host) {
         || e.target.closest('.tw-close-headline')  // "$X quoted" line
         || e.target.closest('.tw-dates')           // date chip row
         || e.target.closest('.tw-actions')         // action chip rows
+        || e.target.closest('.tw-compact-row')     // new compact: brand + stage line
+        || e.target.closest('.tw-compact-sub')     // new compact: step + summary line
         || bannerClick;                             // red unread banner
       if (!toggleSurface) return;
       const dealId = row.dataset.deal;
@@ -6156,12 +7187,15 @@ function renderThisWeekDeal(d) {
     // If ISO-like, try to format short. CRITICAL: check isNaN(getTime()) so
     // garbage dates like "2026-13-45" don't render as the literal string
     // "Invalid Date" — they pass through as the original phrase instead.
+    // Force UTC interpretation/display for date-only strings so "2026-06-12"
+    // doesn't render as Jun 11 in negative-offset timezones (new Date('2026-06-12')
+    // parses as UTC midnight which is the previous day in PT).
     const isoM = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (isoM) {
       try {
-        const dt = new Date(s);
+        const dt = new Date(isoM[0] + 'T00:00:00Z');
         if (!isNaN(dt.getTime())) {
-          return dt.toLocaleDateString('en-US', { month:'short', day:'numeric' });
+          return dt.toLocaleDateString('en-US', { month:'short', day:'numeric', timeZone: 'UTC' });
         }
       } catch {}
     }
@@ -6251,53 +7285,52 @@ function renderThisWeekDeal(d) {
     const tooltip = (d.close_reasons || []).slice(0, 4).join(' · ');
     closeScoreChip = `<span class="tw-close-chip" style="background:${bg};color:${color}" title="${escapeHtml(tooltip)}">${d.close_blocked ? '🚫' : ''} ${s}/10</span>`;
   }
-  return `<div class="tw-deal${unreadBanner ? ' has-unread' : ''}" data-deal="${d.deal_id}">
+  // COMPACT MODE — the verbose tw-deal layout (close-headline / ai_summary /
+  // park row / date chips / full action list) gets compressed to a two-line
+  // header per Riley's "make it like Today's Work" ask. Everything richer
+  // (full pipeline, conversation, cook reply) is one click away via the
+  // existing .tw-deal-body expansion.
+  //
+  //   Line 1: [CREATOR] Brand [STAGE]                       $fee · key-date
+  //   Line 2: Current step · AI summary  (single-line ellipsis if long)
+  //
+  // Unread banner still pops above. Click anywhere → expand → loadPillBody.
+  const acts = d.actions || [];
+  let currentIdx = acts.findIndex(a => (a.status || (a.completed ? 'done' : 'todo')) === 'active');
+  if (currentIdx === -1) currentIdx = acts.findIndex(a => (a.status || 'todo') === 'waiting');
+  if (currentIdx === -1) currentIdx = acts.findIndex(a => !a.completed && (a.status || 'todo') !== 'done');
+  if (currentIdx === -1) currentIdx = acts.length - 1;
+  const currentAct = acts[currentIdx];
+  const currentStep = (currentAct?.label || '').trim();
+  const currentStepDate = (currentAct?.date_label || '').trim();
+  // Pick the most relevant single date for the compact header — prefer
+  // closest-future-action: script due > post > sign by > delivery > payment.
+  const primaryDate = fmtDate(kd.script_due) || fmtDate(kd.post)
+                   || fmtDate(kd.sign_by)    || fmtDate(kd.delivery)
+                   || fmtDate(kd.payment_due);
+  // Fall back to the active creator filter (not hardcoded 'cooper') — buildThisWeek
+  // strips creator_id from pending rows since the query already filtered by it,
+  // so the deal is by definition the current creator's.
+  const creatorId = d.creator_id || (typeof CREATOR_FILTER !== 'undefined' && CREATOR_FILTER) || localStorage.getItem('triibe.creator') || 'cooper';
+  const creatorCap = creatorId[0].toUpperCase() + creatorId.slice(1);
+  return `<div class="tw-deal compact${unreadBanner ? ' has-unread' : ''}" data-deal="${d.deal_id}">
     ${unreadBanner}
-    <div class="tw-deal-hdr">
-      <div class="tw-deal-brand">${escapeHtml(d.brand)}${progressLabel}</div>
-      ${closeScoreChip}
-      ${feeStr ? `<span class="tw-deal-fee">${feeStr}</span>` : ''}
-      <span class="tw-deal-stage ${stageClass}">${stageLabel}</span>
+    <div class="tw-compact-row">
+      <div class="tw-compact-l">
+        <span class="tw-creator-pill ${creatorId}">${escapeHtml(creatorCap)}</span>
+        <span class="tw-compact-brand">${escapeHtml(d.brand)}</span>
+        <span class="tw-compact-stage ${stageClass}">${stageLabel}</span>
+      </div>
+      <div class="tw-compact-r">
+        ${feeStr ? `<span class="tw-compact-fee">${feeStr}</span>` : ''}
+        ${primaryDate ? `<span class="tw-compact-date">${escapeHtml(primaryDate)}</span>` : ''}
+      </div>
     </div>
-    ${d.close_headline ? `<div class="tw-close-headline">${escapeHtml(d.close_headline)}</div>` : ''}
-    ${d.ai_summary ? `<div class="tw-deal-summary">${escapeHtml(d.ai_summary)}</div>` : ''}
-    ${unreadChip ? `<div class="tw-unread-row">${unreadChip}</div>` : ''}
-    <div class="tw-park-row" style="display:flex;justify-content:flex-end;margin:-4px 0 6px">
-      <button type="button" class="tw-park-btn" data-deal="${escapeHtml(d.deal_id)}" title="Park this deal — set a comeback date so it auto-revives in Pitches when ready">⏸ Park for later</button>
-    </div>
-    ${dateChipRow}
-    <div class="tw-actions">
-      ${(() => {
-        // Compute which step is the CURRENT focus (collapsed pill shows only
-        // this row; expanded pill shows all). Priority order:
-        //   1. First "active" step  — Riley needs to push this NOW
-        //   2. First "waiting" step — ball on brand, polling for reply
-        //   3. First "todo" step    — next thing to do
-        //   4. Last step           — fallback if everything's done
-        const acts = d.actions || [];
-        let currentIdx = acts.findIndex(a => (a.status || (a.completed ? 'done' : 'todo')) === 'active');
-        if (currentIdx === -1) currentIdx = acts.findIndex(a => (a.status || 'todo') === 'waiting');
-        if (currentIdx === -1) currentIdx = acts.findIndex(a => !a.completed && (a.status || 'todo') !== 'done');
-        if (currentIdx === -1) currentIdx = acts.length - 1;
-        return acts.map((a, i) => {
-          const status = a.status || (a.completed ? 'done' : 'todo');
-          const statusBadge = status === 'active'  ? '<span class="tw-stat-badge active">now</span>'
-                            : status === 'waiting' ? '<span class="tw-stat-badge waiting">waiting</span>'
-                            : status === 'done'    ? ''
-                            : '';
-          const isCurrent = i === currentIdx;
-          return `<div class="tw-action status-${status} ${a.completed ? 'done' : ''} ${isCurrent ? 'is-current' : ''}" data-deal="${d.deal_id}" data-kind="${a.kind}">
-            <button class="tw-check" title="${a.completed ? 'Untick' : 'Mark done'}"></button>
-            <span class="tw-dot ${a.tier}" style="${a.completed ? 'opacity:.3' : ''}"></span>
-            <div class="tw-label">
-              <b>${escapeHtml(a.label)}${statusBadge}</b>
-              ${a.detail ? `<div class="tw-detail">${escapeHtml(a.detail)}</div>` : ''}
-            </div>
-            <span class="tw-when ${a.tier}">${escapeHtml(a.date_label || '')}</span>
-          </div>`;
-        }).join('') + `<div class="tw-actions-hint">${acts.length > 1 ? `+ ${acts.length - 1} more step${acts.length === 2 ? '' : 's'} — click to expand` : ''}</div>`;
-      })()}
-    </div>
+    ${(currentStep || d.ai_summary) ? `<div class="tw-compact-sub">
+      ${currentStep ? `<span class="tw-compact-step">${escapeHtml(currentStep)}${currentStepDate ? ` <span class="tw-compact-step-when">${escapeHtml(currentStepDate)}</span>` : ''}</span>` : ''}
+      ${currentStep && d.ai_summary ? `<span class="tw-compact-dot">·</span>` : ''}
+      ${d.ai_summary ? `<span class="tw-compact-summary">${escapeHtml(d.ai_summary)}</span>` : ''}
+    </div>` : ''}
     <div class="tw-deal-body">
       <div class="body-content"><span style="color:var(--cream-faint);font-size:12px">Loading…</span></div>
     </div>
@@ -6459,22 +7492,60 @@ async function renderNotifBanner() {
   const clearAll = document.getElementById('notifBellClearAll');
   if (!badge || !list) return;
   try {
-    const notifs = await api('/api/notifications');
+    const [notifs, needs] = await Promise.all([
+      api('/api/notifications'),
+      api('/api/needs-you' + (CREATOR_FILTER ? `?creator=${CREATOR_FILTER}` : '')).catch(() => ({ items: [] })),
+    ]);
     const filtered = (notifs || []).filter(n => !n.deal || !CREATOR_FILTER || n.deal.creator_id === CREATOR_FILTER);
+    const needsItems = needs?.items || [];
 
-    // Badge count
-    if (filtered.length) {
-      badge.textContent = filtered.length;
+    // Badge count — Needs-you is the priority signal (red), notifs are
+    // supplementary. If both are zero, hide badge. If only needs-you has
+    // items, badge is red. Otherwise sum.
+    const totalCount = needsItems.length + filtered.length;
+    if (totalCount) {
+      badge.textContent = totalCount;
       badge.style.display = 'inline-block';
+      badge.style.background = needsItems.length ? 'var(--red, #E5736E)' : '';
     } else {
       badge.style.display = 'none';
+      badge.style.background = '';
     }
 
+    // ---- Build the "Needs you" pinned group at the top of the panel ----
+    const ageStr = h => h == null ? 'just now'
+                     : h < 1 ? 'just now'
+                     : h < 24 ? `${h}h ago`
+                     : `${Math.round(h/24)}d ago`;
+    const needsHtml = needsItems.length ? `
+      <div class="needs-you-group" style="border-bottom:1px solid var(--line)">
+        <div style="padding:10px 12px 6px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:#E5736E;font-weight:800;display:flex;align-items:center;justify-content:space-between">
+          <span>⚡ Needs you · ${needsItems.length}</span>
+          <span style="font-size:9.5px;color:var(--cream-faint);font-weight:600;letter-spacing:.04em">oldest first</span>
+        </div>
+        ${needsItems.map(n => {
+          const cap = (s) => (s||'')[0]?.toUpperCase() + (s||'').slice(1);
+          const isCreator = n.kind === 'creator_message';
+          const title = isCreator
+            ? `💬 ${cap(n.creator_id)} sent ${n.count > 1 ? `${n.count} messages` : 'a message'}`
+            : `📧 ${escapeHtml(n.brand)} · ${cap(n.creator_id)}`;
+          const sub = `${escapeHtml(n.snippet || '')} <span style="color:var(--cream-faint)">· ${ageStr(n.age_hours)}</span>`;
+          const stale = n.stale ? 'border-left:3px solid #E5736E' : 'border-left:3px solid var(--gold)';
+          return `<div class="needs-row" data-kind="${n.kind}" data-deal-id="${escapeHtml(n.deal_id || '')}" data-creator="${escapeHtml(n.creator_id || '')}" style="padding:10px 12px;font-size:12px;line-height:1.5;cursor:pointer;${stale};transition:background .12s">
+            <div style="font-weight:800;color:var(--cream)">${title}</div>
+            <div style="color:var(--cream-dim);margin-top:2px;font-size:11.5px">${sub}</div>
+          </div>`;
+        }).join('')}
+      </div>` : '';
+
     // Panel content
-    if (!filtered.length) {
+    if (!filtered.length && !needsItems.length) {
       list.innerHTML = `<div style="padding:18px 12px;text-align:center;color:var(--cream-faint);font-size:12px">No recent activity</div>`;
+    } else if (!filtered.length) {
+      list.innerHTML = needsHtml;
     } else {
-      list.innerHTML = filtered.map(n => `
+      list.innerHTML = needsHtml + `<div style="padding:10px 12px 6px;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--cream-faint);font-weight:800">System</div>`;
+      list.innerHTML += filtered.map(n => `
         <div class="notif-row" data-id="${n.id}" data-deal-id="${escapeHtml(n.deal?.id || '')}" style="padding:10px 12px;border-top:1px solid var(--line);font-size:12px;line-height:1.5;cursor:${n.deal?.id ? 'pointer' : 'default'};transition:background .12s">
           <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
             <div style="flex:1;min-width:0" data-act="open">
@@ -6501,6 +7572,65 @@ async function renderNotifBanner() {
         if (!document.getElementById('notifBell').contains(e.target)) panel.style.display = 'none';
       });
     }
+
+    // Wire "Needs you" rows — clicking jumps to the deal pill (brand_reply)
+    // or opens the creator chat pill (creator_message), then closes the panel.
+    list.querySelectorAll('.needs-row').forEach(el => {
+      el.addEventListener('mouseenter', () => { el.style.background = 'rgba(232,230,220,.06)'; });
+      el.addEventListener('mouseleave', () => { el.style.background = ''; });
+      el.onclick = () => {
+        panel.style.display = 'none';
+        const kind = el.dataset.kind;
+        if (kind === 'brand_reply') {
+          const dealId = el.dataset.dealId;
+          const todayBtn = document.querySelector('#nav button[data-g="today"]');
+          if (todayBtn && !todayBtn.classList.contains('active')) todayBtn.click();
+          setTimeout(() => {
+            const pill = document.querySelector(`.tw-deal[data-deal="${dealId}"]`);
+            if (pill) {
+              pill.scrollIntoView({ behavior: 'smooth', block: 'center' });
+              const trigger = pill.querySelector('.tw-compact-row') || pill.querySelector('.tw-deal-hdr');
+              if (trigger && !pill.classList.contains('open')) trigger.click();
+            }
+          }, 280);
+        } else if (kind === 'creator_message') {
+          // Open the creator chat MODAL directly (same flow as the subnav
+          // "💬 Cooper × Triibe" chip). selectCreator() switches the filter so
+          // renderCreatorChat() targets the right person; then we wait one tick
+          // for the re-render and pop the modal.
+          const creator = el.dataset.creator;
+          if (creator && typeof selectCreator === 'function') selectCreator(creator);
+          const todayBtn = document.querySelector('#nav button[data-g="today"]');
+          if (todayBtn && !todayBtn.classList.contains('active')) todayBtn.click();
+          const openChatModal = () => {
+            const modal = document.getElementById('creatorChatModal');
+            const pill  = modal?.querySelector('.creator-pill');
+            if (!modal || !pill) return false;
+            modal.style.display = 'flex';
+            pill.classList.add('open');
+            pill.querySelector('.row > .badge')?.remove();
+            document.getElementById('creatorPingBadge')?.remove();
+            setTimeout(() => {
+              document.getElementById('creatorChatBody')?.focus();
+              const log = document.getElementById('creatorChatLog');
+              if (log) log.scrollTop = log.scrollHeight;
+              // Mark the chat as read so the "Needs you" item drops off the
+              // bell on the next refresh.
+              if (creator) {
+                fetch(`/api/creator-chat/${creator}/mark-read`, { method: 'POST' })
+                  .catch(() => {});
+              }
+            }, 60);
+            return true;
+          };
+          // Retry briefly in case the modal hasn't been built yet (first nav).
+          if (!openChatModal()) {
+            setTimeout(openChatModal, 200);
+            setTimeout(openChatModal, 500);
+          }
+        }
+      };
+    });
 
     // Wire row actions
     list.querySelectorAll('.notif-row').forEach(el => {
@@ -6581,6 +7711,7 @@ async function refreshAll() {
       // renderFollowUps() invoked on-demand by renderInbox when the ⌛ filter is active
       // renderLeadsTray() moved to Inbox > New pitches filter (no longer on Today)
       renderInboxPitches(),  // unmatched brand emails AI-classified to creators
+      renderTodaysWork(),    // cross-creator action queue with clock-aware modes
       renderDiscovery(),     // collapsed early-stage (conversation funnel) deals
       renderInbox(),         // inbox tab — brand messages needing a reply + AI cook
       renderBoard(),         // pipeline tab Kanban
@@ -6599,6 +7730,191 @@ async function refreshAll() {
 refreshAll();
 setInterval(refreshAll, 30000); // soft refresh every 30s
 
+// =====================================================================
+// GLOBAL SEARCH — debounced input → /api/search → ranked dropdown.
+// Hits are grouped by kind (deals / threads / messages) and clicking jumps
+// to that deal pill on Today (with the matching thread/message highlighted).
+// =====================================================================
+(() => {
+  const wrap = document.getElementById('searchWrap');
+  const input = document.getElementById('searchInput');
+  const dropdown = document.getElementById('searchDropdown');
+  if (!wrap || !input || !dropdown) return;
+  let debounceTimer = null;
+  let lastQuery = '';
+  let focusedIdx = -1;
+  let currentHits = [];
+
+  const ageStr = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const days = Math.floor((Date.now() - d.getTime()) / 86400000);
+    if (days === 0) return 'today';
+    if (days === 1) return 'yesterday';
+    if (days < 7) return days + 'd ago';
+    if (days < 30) return Math.floor(days/7) + 'w ago';
+    if (days < 365) return Math.floor(days/30) + 'mo ago';
+    return d.toLocaleDateString([], { month:'short', year:'2-digit' });
+  };
+  const highlightMatches = (text, q) => {
+    if (!text || !q) return escapeHtml(text || '');
+    const escaped = escapeHtml(text);
+    const escapedQ = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return escaped.replace(new RegExp(escapedQ, 'gi'), m => `<mark>${m}</mark>`);
+  };
+
+  const renderResults = (q, hits) => {
+    currentHits = hits;
+    focusedIdx = -1;
+    if (!hits.length) {
+      dropdown.innerHTML = `<div class="sd-empty">No matches for "${escapeHtml(q)}"</div>`;
+      dropdown.style.display = 'block';
+      return;
+    }
+    const html = `
+      <div class="sd-header">${hits.length} result${hits.length===1?'':'s'} · press ↑↓ to navigate, enter to open</div>
+      ${hits.map((h, i) => {
+        const creator = h.creator ? `<span class="sd-creator">${escapeHtml(h.creator)}</span>` : '';
+        const brand = h.brand || h.subject || 'Unmatched thread';
+        const moreBadge = h.match_count && h.match_count > 1
+          ? `<span class="sd-more">+${h.match_count - 1}</span>` : '';
+        return `<div class="sd-row" data-idx="${i}">
+          <span class="sd-kind ${h.kind}">${h.kind === 'message' ? (h.channel === 'whatsapp' ? '💬' : '📧') : (h.kind === 'thread' ? '#' : '★')}</span>
+          <div class="sd-body">
+            <div class="sd-head">
+              <span class="sd-brand">${escapeHtml(brand)}</span>
+              ${creator}
+              ${moreBadge}
+              <span class="sd-when">${ageStr(h.sent_at)}</span>
+            </div>
+            <div class="sd-snippet">${highlightMatches(h.snippet || '', q)}</div>
+          </div>
+        </div>`;
+      }).join('')}`;
+    dropdown.innerHTML = html;
+    dropdown.style.display = 'block';
+    // Wire row clicks
+    dropdown.querySelectorAll('.sd-row').forEach(row => {
+      row.onclick = () => openHit(currentHits[Number(row.dataset.idx)]);
+    });
+  };
+
+  const openHit = (h) => {
+    if (!h) return;
+    dropdown.style.display = 'none';
+    input.value = '';
+    lastQuery = '';
+    if (!h.deal_id) {
+      // Thread without a deal — surface the Pitches tab so Riley can promote it
+      document.querySelector('#nav button[data-g="inbox"]')?.click();
+      return;
+    }
+    // Switch creator first so the right list is being rendered
+    if (h.creator && typeof selectCreator === 'function') selectCreator(h.creator);
+    // Pick the tab where the deal actually lives based on its state/stage.
+    // Without this, a dormant deal like Higgsfield-direct or a lost deal
+    // would navigate to Today and find nothing.
+    //   dormant / parked    → Parked tab
+    //   in_works / active   → Today (active deals)
+    //   pitching            → Pitches tab (Close these deals)
+    //   conversation / cold → Today (Early discovery) as a soft default
+    //   completed           → Today > Completed sub-tab
+    //   lost                → Today (do nothing fancy; pill won't be visible)
+    let targetTab = 'today';
+    const stage = h.funnel_stage, state = h.state;
+    if (state === 'dormant') targetTab = 'parked';
+    else if (stage === 'pitching') targetTab = 'inbox';
+    else if (stage === 'completed') targetTab = 'today';
+    // Click the tab — try multiple selectors because tab IDs differ
+    document.querySelector(`#nav button[data-g="${targetTab}"]`)?.click();
+    // Try to find + open the pill across several render targets (tw-deal /
+    // pill / lead-pill / parked-pill / row in Today's Work). Polls for up to
+    // 1.5s because the new tab may need a fetch + render to land.
+    const trySelectors = (deal_id) => [
+      `.tw-deal[data-deal="${deal_id}"]`,
+      `.pill[data-deal="${deal_id}"]`,
+      `.lead-pill[data-id="${deal_id}"]`,
+      `.parked-pill[data-deal="${deal_id}"]`,
+      `.park-card[data-deal="${deal_id}"]`,
+    ];
+    let attempts = 0;
+    const tryOpen = () => {
+      attempts++;
+      for (const sel of trySelectors(h.deal_id)) {
+        const el = document.querySelector(sel);
+        if (el) {
+          el.scrollIntoView({ behavior:'smooth', block:'center' });
+          // Trigger the pill's actual click handler so the lazy-loaded body
+          // (conversation, AI summary, Cook reply textarea) renders. Adding
+          // .open by hand skips the loader and gives Riley a collapsed pill.
+          if (!el.classList.contains('open')) {
+            const toggleSurface = el.querySelector('.tw-compact-row')
+              || el.querySelector('.tw-deal-hdr')
+              || el.querySelector('.pp-row')
+              || el.querySelector('.lp-row')
+              || el;
+            toggleSurface.click();
+          }
+          return true;
+        }
+      }
+      if (attempts < 10) setTimeout(tryOpen, 150);
+      return false;
+    };
+    setTimeout(tryOpen, 200);
+  };
+
+  const runSearch = async (q) => {
+    if (!q || q.length < 2) { dropdown.style.display = 'none'; return; }
+    try {
+      const r = await api(`/api/search?q=${encodeURIComponent(q)}`);
+      if (q !== lastQuery) return;  // race: a newer query has arrived
+      renderResults(q, r.hits || []);
+    } catch (e) { /* swallow — empty UI is fine */ }
+  };
+
+  input.addEventListener('input', (e) => {
+    const q = e.target.value.trim();
+    lastQuery = q;
+    clearTimeout(debounceTimer);
+    if (!q) { dropdown.style.display = 'none'; return; }
+    debounceTimer = setTimeout(() => runSearch(q), 200);
+  });
+  input.addEventListener('focus', () => {
+    if (lastQuery && currentHits.length) dropdown.style.display = 'block';
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { input.blur(); dropdown.style.display = 'none'; return; }
+    if (!currentHits.length) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      focusedIdx = Math.min(currentHits.length - 1, focusedIdx + 1);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      focusedIdx = Math.max(0, focusedIdx - 1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      openHit(currentHits[focusedIdx >= 0 ? focusedIdx : 0]);
+      return;
+    } else { return; }
+    dropdown.querySelectorAll('.sd-row').forEach((r, i) => r.classList.toggle('focused', i === focusedIdx));
+    const focused = dropdown.querySelector('.sd-row.focused');
+    if (focused) focused.scrollIntoView({ block: 'nearest' });
+  });
+  // Click outside → close dropdown
+  document.addEventListener('click', (e) => {
+    if (!wrap.contains(e.target)) dropdown.style.display = 'none';
+  });
+  // Cmd/Ctrl + K → focus search globally
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      e.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
+})();
+
 // --- WHATSAPP DAEMON HEARTBEAT ----------------------------------------------
 // Polls /api/wa/status every 30s. Updates the sidebar autopilot footer with
 // the real daemon state (ready, last event age). When stale > 60min, paints
@@ -6611,6 +7927,20 @@ async function renderWaHeartbeat() {
   const pulse  = document.getElementById('autopilotPulse');
   const restart= document.getElementById('autopilotRestart');
   if (!detail) return;
+  // Brian's brand convos run over iMessage on Riley's Mac, not WhatsApp — the
+  // WA daemon status is irrelevant noise on his page, so hide the heartbeat
+  // entirely when his view is active. (Cooper + Charlie keep it.)
+  // BUT — the Creators roster page (and any other view that isn't creator-
+  // specific) should always show the daemon status. Otherwise selecting
+  // Brian then bouncing to Creators leaves Riley with no visibility into
+  // whether WA is alive across his whole platform.
+  const heartbeat = document.getElementById('autopilotHeartbeat');
+  const currentCreator = (typeof CREATOR_FILTER !== 'undefined' && CREATOR_FILTER)
+    || localStorage.getItem('triibe.creator') || 'cooper';
+  const onCreatorsRoster = !!document.querySelector('#nav button[data-g="creators"].active');
+  const hideForBrian = currentCreator === 'brian' && !onCreatorsRoster;
+  if (heartbeat) heartbeat.style.display = hideForBrian ? 'none' : '';
+  if (hideForBrian) return;
   let s = null;
   try {
     const r = await fetch('/api/wa/status', { cache:'no-store' });

@@ -9,11 +9,53 @@
  * Classify a brand message in the context of its deal.
  * @returns { action_type, authority, requires_response, deadline_hint, reason } or null
  */
+// Out-of-office auto-reply detection — short-circuit BEFORE the AI call so we
+// (a) don't burn tokens classifying noise, and (b) downstream engines (auto-park,
+// inbox, close-score) can treat OOO as "no real engagement." Riley's rule: if a
+// brand only ever sent an OOO, they're still ghosting the pitch.
+//
+// Heuristic — match common patterns. Bias toward FALSE POSITIVES being rare
+// (a real brand reply that mentions "out of office" in context will get sent
+// to the AI anyway via the broader classification flow).
+function detectOOO(text) {
+  if (!text) return false;
+  const t = text.toLowerCase();
+  // High-confidence patterns — almost always indicates an auto-reply
+  const strong = [
+    /out\s+of\s+(the\s+)?office/i,
+    /\bautomat(ic|ed)\s+reply\b/i,
+    /\bauto[-\s]?reply\b/i,
+    /(currently|am)\s+away\s+from\s+(the\s+)?(office|desk)/i,
+    /i'?m\s+(currently\s+)?(on\s+(vacation|holiday|leave|pto)|out\s+of\s+the\s+country)/i,
+    /thank you for your (email|message)[\s\S]{0,80}(?:back|return|reach)/i,
+    /will\s+(return|be\s+back)\s+(to\s+(the\s+)?office\s+)?on\s+\w/i,
+    /limited\s+access\s+to\s+(my\s+)?email/i,
+    /maternity\s+leave|parental\s+leave/i,
+  ];
+  if (strong.some(rx => rx.test(t))) return true;
+  // Weaker signal — needs two of these to qualify
+  const weak = [/away from/i, /\bback on\b/i, /\breach (?:out )?(?:to )?\S+@/i, /please contact/i, /for urgent/i, /\bin my absence\b/i];
+  const weakHits = weak.filter(rx => rx.test(t)).length;
+  return weakHits >= 2 && t.length < 1500;  // short auto-reply length
+}
+
 export async function classifyMessage({ apiKey, message, deal, obligations }) {
   if (!apiKey) return null;
   if (!message?.body && !message?.snippet) return null;
 
   const text = (message.body || message.snippet || '').slice(0, 4000);
+
+  // Pre-AI shortcut for OOO replies — no token spend, instant classification,
+  // and a clear marker for auto-park + inbox so OOO doesn't fake brand engagement.
+  if (detectOOO(text)) {
+    return {
+      action_type: 'ooo',
+      authority: 'fyi',
+      requires_response: false,
+      deadline_hint: null,
+      reason: 'Out-of-office auto-reply — not real brand engagement.',
+    };
+  }
   const obList = (obligations || []).map(o =>
     `- ${o.type}: ${o.what}${o.when ? ' by ' + o.when : ''}${o.required ? ' (REQUIRED)' : ''}`
   ).join('\n') || '(no obligations on file)';

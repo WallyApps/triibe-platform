@@ -385,7 +385,43 @@ export async function pullSingleThread(db, threadId) {
 // Threads a reply correctly by referencing the original Message-ID. The reply
 // is wrapped in an RFC 2822 MIME blob, base64-url encoded, sent via
 // users.messages.send with the threadId.
-export async function sendThreadedReply({ thread_id, reply_to_msg_id, to, subject, body }) {
+// Strip a trailing signoff block + any quoted reply chain so we can measure
+// the actual content length. Catches "Best,\nRiley" style closings and the
+// "Best,\nRiley Wallack\nTriibe Talents" multi-line variant Riley uses.
+function stripSignoffAndQuotes(text) {
+  if (!text) return '';
+  let s = String(text);
+  // Strip Gmail quoted-reply chains (most common patterns)
+  s = s.replace(/^[\s\S]*?\n>\s+[\s\S]*$/m, '');                 // > lines
+  s = s.replace(/\n+On .+wrote:[\s\S]*$/, '');                    // "On X wrote:"
+  s = s.replace(/\n+-{2,}\s*Original Message\s*-{2,}[\s\S]*$/, '');
+  s = s.replace(/\n+_{5,}[\s\S]*$/, '');                          // Outlook bar
+  // Strip trailing signoff blocks. Looks for a closing word + comma followed
+  // by 1–4 short lines (name, title, company). Conservative — won't eat
+  // anything if no closing keyword is found.
+  //   - Mid-message variant: requires \n+ before the closer (preserves prose
+  //     above the signoff).
+  //   - Start-of-message variant: when the WHOLE body IS the signoff (no
+  //     content above), match from line start with ^. Without this anchor,
+  //     "Best,\nRiley Wallack\nTriibe Talents" sailed past as 32 chars of
+  //     "content" and shipped an empty email to the brand.
+  const CLOSERS_MID  = /\n+\s*(best|thanks|thank you|cheers|regards|warmly|sincerely|talk soon|appreciate it|all the best|much appreciated)[,!]?\s*\n[\s\S]*$/i;
+  const CLOSERS_TOP  = /^\s*(best|thanks|thank you|cheers|regards|warmly|sincerely|talk soon|appreciate it|all the best|much appreciated)[,!]?\s*\n[\s\S]*$/i;
+  s = s.replace(CLOSERS_MID, '');
+  s = s.replace(CLOSERS_TOP, '');
+  return s.trim();
+}
+
+export async function sendThreadedReply({ thread_id, reply_to_msg_id, to, subject, body, bcc }) {
+  // GUARD: never send a body that's just a signoff like "Best, Riley" with no
+  // actual content above it. This bug bit Riley once already — a near-empty
+  // body got through and the brand got a confusing 4-word email. The check
+  // strips quoted-reply chains + the trailing signoff block, then requires
+  // ≥30 chars of real prose before sending.
+  const stripped = stripSignoffAndQuotes(body || '');
+  if (stripped.length < 30) {
+    throw new Error(`Refusing to send — body is empty or just a signoff (${stripped.length} chars of real content after stripping signature/quotes). Edit the body and try again.`);
+  }
   const oAuth2 = loadAuthedClient();
   if (!oAuth2) throw new Error('Gmail OAuth not set up — run `npm run gmail-auth` first.');
   const gmail = google.gmail({ version: 'v1', auth: oAuth2 });
@@ -416,8 +452,15 @@ export async function sendThreadedReply({ thread_id, reply_to_msg_id, to, subjec
   if (!resolvedTo) throw new Error('No recipient — could not resolve from thread.');
   if (!resolvedSubject) resolvedSubject = 'Re:';
 
+  // Sanity-check BCC: skip if it's the placeholder, or matches the To address
+  // (would double-deliver), or is empty/whitespace.
+  const bccClean = (bcc || '').trim();
+  const includeBcc = bccClean
+    && !/REPLACE_/i.test(bccClean)
+    && bccClean.toLowerCase() !== (resolvedTo || '').toLowerCase();
   const lines = [
     `To: ${resolvedTo}`,
+    includeBcc ? `Bcc: ${bccClean}` : '',
     `Subject: ${resolvedSubject}`,
     inReplyToHeader ? `In-Reply-To: ${inReplyToHeader}` : '',
     referencesHeader ? `References: ${referencesHeader}` : '',

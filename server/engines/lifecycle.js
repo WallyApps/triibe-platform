@@ -58,16 +58,20 @@ export function buildLifecycle(deal) {
   const stage = deal.funnel_stage || '';
   const raw = deal.raw_stage || '';
   const state = deal.state || 'open';
-  // hasContract = there is REAL paper, not just verbal terms. The funnel_stage
-  // is sometimes upstream-wrong (GoMarble shows in_works even though it's just
-  // terms_agreed). So we require EITHER state=won OR raw_stage explicitly
-  // mentions contract/signed/confirmed/received. "terms_agreed" alone is NOT
-  // a contract — it falls through to the single "Negotiate" step.
+  // hasContract = we're past the pre-contract negotiation phase. Any of these
+  // signals confirm the brand said yes (verbal or paper) — Creed Media is
+  // in_works + in_production + fee_status=agreed + posted; sticking it on
+  // "Negotiate terms" was masking the real next step (invoice + payment).
   const hasContract = state === 'won'
                      || raw.includes('signed')
                      || raw.includes('contract')
                      || raw.includes('confirmed')
-                     || raw === 'received';
+                     || raw === 'received'
+                     || raw.includes('production')         // in_production / post_production
+                     || raw.includes('revision')           // in_revision
+                     || raw === 'in_production'
+                     || stage === 'in_works' || stage === 'active'
+                     || deal.fee_status === 'agreed';
   const isWon = state === 'won';
   const postingDate = deal.posting_date || kd.post;
   const postingDateLabel = kd.post || deal.posting_date || null;
@@ -214,6 +218,41 @@ export function buildLifecycle(deal) {
     });
   }
 
+  // ---- Monotonic completion: if a downstream step is done, everything
+  // upstream must be too. Charlie posting last night implies script/film/draft
+  // are obviously complete even if the messages thread doesn't have the
+  // keywords the fallback engine looks for. Walk forward: once a step is done,
+  // every earlier step gets bumped to done as well. Post being live also pulls
+  // forward everything before it.
+  const postIdx = steps.findIndex(s => s.kind === 'post_live');
+  const isPostedLifeCycle = postIdx >= 0 && postingDate && new Date(postingDate) < new Date();
+  if (isPostedLifeCycle) {
+    for (let i = 0; i < postIdx; i++) {
+      if (steps[i].status !== 'done') {
+        steps[i].status = 'done';
+        steps[i].completed = true;
+        steps[i].tier = 'green';
+      }
+    }
+    // Also bump the post step itself — if the post date passed, "post live" is done
+    steps[postIdx].status = 'done';
+    steps[postIdx].completed = true;
+    steps[postIdx].tier = 'green';
+  }
+  // General pass: any later step being done implies earlier ones are too.
+  for (let i = steps.length - 1; i > 0; i--) {
+    if (steps[i].completed) {
+      for (let j = 0; j < i; j++) {
+        if (!steps[j].completed) {
+          steps[j].status = 'done';
+          steps[j].completed = true;
+          steps[j].tier = 'green';
+        }
+      }
+      break;
+    }
+  }
+
   // ---- Apply AI verdict overrides (if cached) ----
   // If the lifecycle_audit engine has run for this deal, prefer its verdict
   // for each step over the keyword-based inference above. This is what makes
@@ -343,10 +382,13 @@ function formatDate(s) {
   if (!s) return '';
   const isoM = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
   if (isoM) {
+    // Force UTC interpretation + display so a date-only string like
+    // "2026-06-12" doesn't render as "Jun 11" in negative-offset timezones
+    // (new Date('2026-06-12') parses as UTC midnight, which is Jun 11 in PT).
     try {
-      const dt = new Date(s);
+      const dt = new Date(isoM[0] + 'T00:00:00Z');
       if (!isNaN(dt.getTime())) {
-        return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
       }
     } catch {}
   }

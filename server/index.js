@@ -18,6 +18,36 @@ import { promoteFromContract, promoteFromEmailSignal, undoPromotion,
 import { readFileSync as _readRateCard } from 'node:fs';
 let RATE_CARD = {};
 try { RATE_CARD = JSON.parse(_readRateCard('/Users/rileywallack/triibe-platform/config/rate_card.json', 'utf8')); } catch {}
+
+// Per-creator BCC lookup — currently used for Brian who wants a copy of every
+// outbound email on his deals. Returns null when no valid BCC is configured
+// (placeholder + missing config + own-loopback are all treated as no-BCC).
+function bccForCreator(creatorId) {
+  const card = creatorId && RATE_CARD[creatorId];
+  if (!card || !card.bcc_email) return null;
+  const addr = String(card.bcc_email).trim();
+  if (!addr || /REPLACE_/i.test(addr)) return null;
+  return addr;
+}
+
+// Brand-category overlap check for per-creator existing exclusivity blocks.
+// Returns the matched partner row { brand, blocked_categories } when an
+// inbound pitch's category conflicts with an existing long-term partner; null
+// otherwise. Used to flag exclusivity-clash pitches on Brian's Pitches list.
+function exclusivityClashFor(creatorId, category) {
+  const card = creatorId && RATE_CARD[creatorId];
+  const partners = card?.existing_exclusive_partners;
+  if (!Array.isArray(partners) || !category) return null;
+  const lc = String(category).toLowerCase();
+  for (const p of partners) {
+    // Tolerate both string-only and structured shapes during migration
+    if (typeof p === 'string') continue;
+    if ((p.blocked_categories || []).some(c => String(c).toLowerCase() === lc)) {
+      return { brand: p.brand, blocked_categories: p.blocked_categories };
+    }
+  }
+  return null;
+}
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { GmailInboundProvider, hasToken as hasGmailToken, sendThreadedReply, pullSingleThread, stripQuotedReply } from './providers/inbound.gmail.js';
 import { runPull as runWhatsAppPull } from '../tools/wa-sync.js';
@@ -83,6 +113,23 @@ route('GET', '/api/deals/([^/]+)', async (req, res, { match }) => {
   json(res, d);
 });
 
+// Full lifecycle steps for one deal — backs the "Show full pipeline" expand
+// on every active deal pill. Returns the same step array buildLifecycle()
+// produces, layered on top of the cached AI verdict in deals.lifecycle_state.
+route('GET', '/api/deals/([^/]+)/lifecycle', async (req, res, { match }) => {
+  const d = P.data.getDeal(match[1]);
+  if (!d) return json(res, { error: 'not found' }, 404);
+  const { buildLifecycle } = await import('./engines/lifecycle.js');
+  // Pull last_outbound + unread_reply + key_dates so buildLifecycle has the
+  // signals it needs to decide each step's status. Reuse the same shape that
+  // /api/this-week assembles per deal.
+  let key_dates = {};
+  try { key_dates = JSON.parse(d.key_dates_json || '{}'); } catch {}
+  const merged = { ...d, key_dates };
+  const steps = buildLifecycle(merged);
+  json(res, { deal_id: d.id, steps, lifecycle_audited_at: d.lifecycle_audited_at });
+});
+
 route('GET', '/api/funnel', async (req, res, { url }) => {
   json(res, P.data.funnelHealth({
     creator: url.searchParams.get('creator') || undefined,
@@ -134,6 +181,22 @@ route('GET', '/api/parked', async (req, res, { url }) => {
     WHERE t.deal_id = ?
     ORDER BY m.sent_at DESC LIMIT 1
   `);
+  // Most recent OUTBOUND on this deal — used to detect "I already reached
+  // back out since parking" so the UI can grey out + de-prioritize those.
+  const lastOurStmt = P.db().prepare(`
+    SELECT m.sent_at
+    FROM messages m JOIN threads t ON t.id = m.thread_id
+    WHERE t.deal_id = ? AND m.from_us = 1
+    ORDER BY m.sent_at DESC LIMIT 1
+  `);
+  // Total outbound count — when Riley has sent ≥2 messages, he's already
+  // worked the thread (initial pitch + at least one follow-up). Pre-park
+  // nudges count here even when the post-park detector misses them.
+  const ourCountStmt = P.db().prepare(`
+    SELECT COUNT(*) AS n
+    FROM messages m JOIN threads t ON t.id = m.thread_id
+    WHERE t.deal_id = ? AND m.from_us = 1
+  `);
   // Compute days-until-revisit for the UI so it can render "in 12d" / "overdue 3d".
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -161,8 +224,31 @@ route('GET', '/api/parked', async (req, res, { url }) => {
         sent_at: m.sent_at,
       };
     }
-    return { ...r, days_until_revisit: days_until, last_msg };
+    // Has Riley already worked this thread? Two signals, either qualifies:
+    //   (a) post-park outbound — last outbound after (or within 5min of)
+    //       parked_at, catches the "I reached back out, auto-park re-parked
+    //       it seconds later" sequence
+    //   (b) ≥2 outbounds total — Riley already sent multiple follow-ups
+    //       before parking (the auto-park reason often says "2 nudges +
+    //       graceful close"), so pre-park nudges count
+    // De-prioritizing these matches Riley's mental model: "show me deals I
+    // haven't already grinded on at the top, hide the ones I've worked."
+    const lastOur = lastOurStmt.get(r.id);
+    const lastOutboundAt = lastOur?.sent_at || null;
+    const ourCount = ourCountStmt.get(r.id)?.n || 0;
+    let already_renudged = ourCount >= 2;
+    if (!already_renudged && lastOutboundAt && r.parked_at) {
+      const outboundMs = new Date(lastOutboundAt).getTime();
+      const parkedMs   = new Date(r.parked_at + (r.parked_at.endsWith('Z') ? '' : 'Z')).getTime();
+      const GRACE_MS = 5 * 60_000;
+      already_renudged = outboundMs >= parkedMs - GRACE_MS;
+    }
+    return { ...r, days_until_revisit: days_until, last_msg, last_outbound_at: lastOutboundAt, outbound_count: ourCount, already_renudged };
   });
+  // Sort: un-nudged first (real action items), already-nudged at the bottom
+  // (waiting on brand). Within each bucket, preserve the original SQL order
+  // (revisit_at ASC, parked_at DESC).
+  enriched.sort((a, b) => Number(a.already_renudged) - Number(b.already_renudged));
   json(res, { parked: enriched, count: enriched.length });
 });
 
@@ -1022,6 +1108,7 @@ route('POST', '/api/drafts/([^/]+)/(approve|reject)', async (req, res, { match }
         to: deal.contact_email,
         subject: draft.subject,
         body,
+        bcc: bccForCreator(deal.creator_id),
       });
       P.data.setDraftStatus(id, 'sent');
       P.data.log({ who:'riley', action:'draft_sent', deal_id: draft.deal_id,
@@ -1056,7 +1143,7 @@ route('POST', '/api/drafts/([^/]+)/(approve|reject)', async (req, res, { match }
 // Used for the pinned pill on Today to coordinate with the creator directly.
 route('GET', '/api/creator-chat/([^/]+)', async (req, res, { match, url }) => {
   const creator = match[1].toLowerCase();
-  if (!['cooper','charlie'].includes(creator))
+  if (!['cooper','charlie','brian'].includes(creator))
     return json(res, { error:'unknown creator' }, 400);
   const chatNameLike = `%${creator.toUpperCase()} X TRIIBE%`;
   const thread = P.db().prepare(`SELECT * FROM threads
@@ -1092,7 +1179,7 @@ route('GET', '/api/creator-chat/([^/]+)', async (req, res, { match, url }) => {
 // Stops the "1 new" badge from re-appearing on the next 30s refresh.
 route('POST', '/api/creator-chat/([^/]+)/mark-read', async (req, res, { match }) => {
   const creator = match[1].toLowerCase();
-  if (!['cooper','charlie'].includes(creator))
+  if (!['cooper','charlie','brian'].includes(creator))
     return json(res, { error:'unknown creator' }, 400);
   const chatNameLike = `%${creator.toUpperCase()} X TRIIBE%`;
   const thread = P.db().prepare(`SELECT id FROM threads
@@ -1108,7 +1195,7 @@ route('POST', '/api/creator-chat/([^/]+)/mark-read', async (req, res, { match })
 // that creator's active-deal pipeline state so the reply has full context.
 route('POST', '/api/creator-chat/([^/]+)/suggest', async (req, res, { match }) => {
   const creator = match[1].toLowerCase();
-  if (!['cooper','charlie'].includes(creator)) return json(res, { error:'unknown creator' }, 400);
+  if (!['cooper','charlie','brian'].includes(creator)) return json(res, { error:'unknown creator' }, 400);
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey || P.cfg('ai_enabled','false') !== 'true')
     return json(res, { ok:false, reason:'AI not enabled' }, 400);
@@ -1227,7 +1314,7 @@ Write Riley's WhatsApp reply.`;
 // BRAND CONTACT (not creator) using recent chat history as context.
 // Used when deal.primary_channel === 'whatsapp'.
 route('POST', '/api/brand-wa-draft', async (req, res) => {
-  const { deal_id, force_new = false } = JSON.parse((await readBody(req)) || '{}');
+  const { deal_id, force_new = false, posture_id = null } = JSON.parse((await readBody(req)) || '{}');
   const deal = P.data.getDeal(deal_id);
   if (!deal) return json(res, { error:'deal not found' }, 404);
 
@@ -1237,8 +1324,19 @@ route('POST', '/api/brand-wa-draft', async (req, res) => {
     ORDER BY last_message_at DESC LIMIT 1`).get(deal_id);
   // Recent messages (last 15) for context
   const waMsgs = waThread ? P.db().prepare(`
-    SELECT id, sender, from_us, sent_at, body, snippet FROM messages
+    SELECT id, sender, from_us, sent_at, body, snippet, channel FROM messages
     WHERE thread_id = ? ORDER BY sent_at DESC LIMIT 15`).all(waThread.id).reverse() : [];
+  // Resolve posture addendum from the same engine so the chip Riley picked
+  // shapes the WA reply too.
+  let postureAddendum = null;
+  if (posture_id) {
+    try {
+      const { computePostures } = await import('./engines/postures.js');
+      const opts = computePostures({ deal, history: waMsgs, rateCard: RATE_CARD });
+      const chosen = opts.find(p => p.id === posture_id);
+      if (chosen) postureAddendum = chosen.prompt_addendum;
+    } catch {}
+  }
 
   const apiKey = process.env.OPENAI_API_KEY;
   const aiEnabled = P.cfg('ai_enabled', 'false') === 'true' && apiKey;
@@ -1253,7 +1351,7 @@ Don't restate what they said. Don't ask for things already agreed. Don't add fee
       const who = m.from_us ? 'Riley' : (deal.contact_name || 'brand');
       return `${who}: ${(m.body || m.snippet || '').replace(/\s+/g,' ').slice(0,500)}`;
     }).join('\n');
-    const user = `BRAND: ${deal.brand}
+    const user = `${postureAddendum ? `RILEY'S CHOSEN POSTURE (overrides any conflicting default tone):\n${postureAddendum}\n\n` : ''}BRAND: ${deal.brand}
 CONTACT: ${deal.contact_name || '(brand contact)'}
 DEAL STATE: ${deal.funnel_stage} (${deal.raw_stage || ''})
 FEE: ${deal.fee_cents ? '$' + (deal.fee_cents/100).toLocaleString() : 'TBD'}
@@ -1511,8 +1609,44 @@ function pickReplyTarget(deal_id) {
 
 // Open-in-platform draft modal: returns the deal, the latest brand message
 // (full body), AND a freshly-cooked AI draft. One call powers the modal.
+// Posture chips — return 2-4 strategy options for the cook modal. Riley picks
+// one, the choice drives the prompt addendum. Empty array → skip the picker
+// and auto-cook (situation is unambiguous).
+route('GET', '/api/draft-postures/([^/]+)', async (req, res, { match }) => {
+  const deal = P.data.getDeal(match[1]);
+  if (!deal) return json(res, { error: 'deal not found' }, 404);
+  const { computePostures } = await import('./engines/postures.js');
+  const history = P.db().prepare(`
+    SELECT id, sender, from_us, sent_at, snippet, body, channel
+    FROM messages WHERE thread_id IN (SELECT id FROM threads WHERE deal_id=?)
+    ORDER BY sent_at ASC LIMIT 40`).all(match[1]);
+  const postures = computePostures({ deal, history, rateCard: RATE_CARD });
+  json(res, { deal_id: match[1], postures });
+});
+
+// Edit-diff capture — log the cook vs sent body delta so we can learn Riley's
+// edit patterns over time. Fired by the client right before send.
+route('POST', '/api/cook-edits', async (req, res) => {
+  const body = JSON.parse((await readBody(req)) || '{}');
+  const { deal_id, posture_id, cooked_body, sent_body, channel } = body;
+  if (!deal_id || !sent_body) return json(res, { error: 'missing fields' }, 400);
+  // Idempotent table create — only runs first time, no-op after.
+  P.db().exec(`CREATE TABLE IF NOT EXISTS cook_edits (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    deal_id TEXT NOT NULL,
+    posture_id TEXT,
+    channel TEXT,
+    cooked_body TEXT,
+    sent_body TEXT,
+    sent_at TEXT NOT NULL DEFAULT (datetime('now'))
+  )`);
+  P.db().prepare(`INSERT INTO cook_edits (deal_id, posture_id, channel, cooked_body, sent_body)
+    VALUES (?,?,?,?,?)`).run(deal_id, posture_id || null, channel || null, cooked_body || '', sent_body);
+  json(res, { ok: true });
+});
+
 route('POST', '/api/draft-with-context', async (req, res) => {
-  const { deal_id, force_new = false, mode: requestedMode = null } = JSON.parse((await readBody(req)) || '{}');
+  const { deal_id, force_new = false, mode: requestedMode = null, posture_id = null } = JSON.parse((await readBody(req)) || '{}');
   // If caller explicitly asked for nudge mode, force a fresh draft (don't reuse
   // an old "reply" draft) and tell the cooker which mode to use.
   const forceFresh = force_new || requestedMode === 'nudge';
@@ -1570,9 +1704,21 @@ route('POST', '/api/draft-with-context', async (req, res) => {
       FROM messages m JOIN threads t ON t.id = m.thread_id
       WHERE t.deal_id = ? AND m.channel = 'whatsapp'
       ORDER BY m.sent_at DESC LIMIT 20`).all(deal_id).reverse();
+    // Resolve posture (if Riley picked a chip) — fetch the addendum text from
+    // the same engine that produces the chips so client + server agree.
+    let postureAddendum = null;
+    if (posture_id) {
+      try {
+        const { computePostures } = await import('./engines/postures.js');
+        const opts = computePostures({ deal, history: threadHistory, rateCard: RATE_CARD });
+        const chosen = opts.find(p => p.id === posture_id);
+        if (chosen) postureAddendum = chosen.prompt_addendum;
+      } catch {}
+    }
     const composed = await P.draft.draft({
       deal, latestMessage: latestMsg, mode,
       threadHistory, waHistory,
+      postureAddendum,
     });
     draft = {
       id: `dr_${Date.now()}_${randomUUID().slice(0,6)}`,
@@ -2653,22 +2799,12 @@ route('GET', '/api/this-week', async (req, res, { url }) => {
           p.chase = { kind: 'stalled', days_quiet: daysQuiet };
         }
       }
+      // Initial sort — runs BEFORE unread_reply enrichment, so we re-sort below
+      // once unread tier is known. Keeping this here so the array is at least
+      // partially ordered if enrichment fails.
       data.pending.sort((a, b) => {
-        // Blocked deals sink to the bottom regardless of anything else
         if (a.close_blocked !== b.close_blocked) return a.close_blocked ? 1 : -1;
-        // Chase candidates float to top: we_owe before stalled before normal
-        const chaseRank = (x) => x.chase?.kind === 'we_owe' ? 0
-                              : x.chase?.kind === 'stalled' ? 1
-                              : 2;
-        const ra = chaseRank(a), rb = chaseRank(b);
-        if (ra !== rb) return ra - rb;
-        // Within same chase tier: highest fee first for chase deals (money on
-        // the table dominates); close_score then fee for normal deals.
-        if (ra < 2) return (b.fee_cents || 0) - (a.fee_cents || 0);
-        const aS = a.close_score ?? 5;
-        const bS = b.close_score ?? 5;
-        if (aS !== bS) return bS - aS;
-        return (b.fee_cents || 0) - (a.fee_cents || 0);
+        return (b.close_score ?? 5) - (a.close_score ?? 5) || (b.fee_cents || 0) - (a.fee_cents || 0);
       });
     }
   } catch (e) {
@@ -2809,6 +2945,45 @@ route('GET', '/api/this-week', async (req, res, { url }) => {
     (data.pending || []).forEach(applyLifecycle);
   } catch (e) {
     console.warn('lifecycle expansion failed:', e.message);
+  }
+
+  // FINAL CLOSE-THESE-DEALS SORT — runs AFTER enrichment so we can prioritize
+  // by signals that need both fields populated (unread_reply, chase tags,
+  // close_score). The whole point of this list is "what should Riley work on
+  // first," so the order matters more than anything else on the page.
+  //
+  //   Tier 1: brand replied + ball-on-us (unread_reply set) — most actionable.
+  //           Sorted by recency: newest brand reply first.
+  //   Tier 2: WE OWE chase candidates — we dropped it, money on the table.
+  //   Tier 3: STALLED chase candidates — brand went quiet, nudge needed.
+  //   Tier 4: Everything else, ranked by close_score then fee.
+  //   Tier 5: Blocked deals sink to the bottom.
+  if (data.pending && data.pending.length) {
+    data.pending.sort((a, b) => {
+      // Blocked deals always last
+      if (!!a.close_blocked !== !!b.close_blocked) return a.close_blocked ? 1 : -1;
+      // Compute tier rank
+      const tier = (x) => {
+        if (x.unread_reply) return 0;
+        if (x.chase?.kind === 'we_owe') return 1;
+        if (x.chase?.kind === 'stalled') return 2;
+        return 3;
+      };
+      const ta = tier(a), tb = tier(b);
+      if (ta !== tb) return ta - tb;
+      // Within unread tier — newest brand reply first
+      if (ta === 0) {
+        const aA = a.unread_reply?.age_hours ?? 9999;
+        const bA = b.unread_reply?.age_hours ?? 9999;
+        if (aA !== bA) return aA - bA;
+      }
+      // Within chase tier — highest fee first
+      if (ta < 3) return (b.fee_cents || 0) - (a.fee_cents || 0);
+      // Normal tier — close_score then fee
+      const aS = a.close_score ?? 5, bS = b.close_score ?? 5;
+      if (aS !== bS) return bS - aS;
+      return (b.fee_cents || 0) - (a.fee_cents || 0);
+    });
   }
 
   json(res, data);
@@ -3307,6 +3482,7 @@ route('POST', '/api/deals/([^/]+)/draft-and-send', async (req, res, { match }) =
       to: deal.contact_email,
       subject: null,  // sendThreadedReply pulls subject from the original message
       body: body.body,
+      bcc: bccForCreator(deal.creator_id),
     });
     P.data.log({ who:'riley', action:'quick_reply_sent', deal_id: dealId,
       summary: `→ ${sendRes.to || deal.contact_email}`, meta: { gmail_message_id: sendRes.id }});
@@ -3434,13 +3610,167 @@ Write Riley's reply now.`;
   }
 });
 
+// extractBrandFromInbound — derive the actual brand name from a Gmail thread,
+// handling forwarded emails (Brian's bwallsocialmedia → Riley flow) where the
+// sender's display name is just the forwarder, not the real brand.
+//
+// Priority:
+//   1. Forwarded email — parse "From: <Name> <email@domain>" inside the body.
+//      Use the domain to derive the brand (tsptalent.co → TSP Talent).
+//   2. Subject after stripping "Fwd:" — try to grab "with <Brand>",
+//      "from <Brand>", or "<Brand>:" / "<Brand> -" patterns.
+//   3. Sender display name (the original logic) — works for direct inbound.
+// unwrapForwarded — when an email is a forward (Brian's bwallsocialmedia →
+// Riley flow), the visible subject/sender/body are all the wrapper, not the
+// real message. Pull the inner brand subject + sender + body out.
+//
+// Returns { subject, sender, body } — same shape as inputs. Falls through
+// to the originals for non-forwarded emails.
+function unwrapForwarded({ subject, sender, body }) {
+  const REPLY_PREFIX = /^((Fwd|Re|FW|回复|答复|转发|Tr|Rv|SV|VS|RE)[:：]\s*)+/i;
+  // Forward markers, Gmail-web + iOS Mail + Outlook variants.
+  const FWD_MARKER = /(?:---------- Forwarded message ---------|Begin forwarded message:|-----\s*Original Message\s*-----|________________________________)/i;
+  const isForward = /^(Fwd|FW|转发)[:：]/i.test(subject || '')
+                 || /bwallsocialmedia@/i.test(sender || '')
+                 || FWD_MARKER.test(body || '');
+  if (!isForward) return { subject, sender, body };
+  let s = subject || '';
+  let from = sender || '';
+  let b = body || '';
+  s = s.replace(REPLY_PREFIX, '').trim();
+  const fromMatch = b.match(/From:\s*([^<\n\r]+?)\s*<([^>]+)>/i);
+  if (fromMatch) {
+    from = `${fromMatch[1].trim()} <${fromMatch[2].trim()}>`;
+  }
+  const innerSubj = b.match(/Subject:\s*([^\n\r]+)/i);
+  if (innerSubj) {
+    s = innerSubj[1].trim().replace(REPLY_PREFIX, '').trim();
+  }
+  // Strip the wrapper: chop everything up through the marker, then keep
+  // chopping header lines (From/Date/Subject/To/Cc/Sent/Reply-To) from the top
+  // in any order until we hit real content. If no marker is present (Brian
+  // sometimes forwards by retyping the destination address inline), jump
+  // straight to the first inline "From:" line and strip from there.
+  b = b.replace(new RegExp(`^[\\s\\S]*?${FWD_MARKER.source}\\s*`, 'i'), '');
+  // After (or instead of) the marker strip, if the body still doesn't start
+  // with a recognizable header, jump to the first inline "From:" line. Handles
+  // Brian's pattern of "marker---riley@triibetalents.com\nFrom: Amanda..." and
+  // marker-less forwards alike.
+  if (!/^(From|Date|Subject|To|Cc|Sent|Reply-To)[:：]/i.test(b)) {
+    const inlineFromIdx = b.search(/^From[:：]\s/im);
+    if (inlineFromIdx > 0) b = b.slice(inlineFromIdx);
+  }
+  for (let i = 0; i < 12; i++) {
+    const next = b.replace(/^(From|Date|Subject|To|Cc|Sent|Reply-To)[:：][^\n]*\n/i, '')
+                  .replace(/^\s*\n+/, '');
+    if (next === b) break;
+    b = next;
+  }
+  return { subject: s, sender: from, body: b.trim() };
+}
+
+function extractBrandFromInbound({ sender, subject, body }) {
+  const isForward = /^Fwd:/i.test(subject || '')
+                 || /bwallsocialmedia@/i.test(sender || '')
+                 || /---------- Forwarded message ---------/i.test(body || '');
+
+  // Words that are NEVER a brand on their own — used to filter out noisy hits
+  // from subject parsing and to skip when domain is an agency.
+  const STOPWORDS = /^(brian|wallack|cooper|charlie|paid|collab|collaboration|opportunity|partnership|invitation|promotion|tiktok|reel|video|campaign|request|inquiry|modeling|fashion|fitness|app|inbound|outreach|brand|talent|talents|creator|creators|influencer|interested|mail|message|with|from|for|the|and|hi|hey|hello)$/i;
+  // Agency-pattern domains we should de-prioritize when picking brand from
+  // forwarded From: line — these are middle-men, not the actual brand.
+  const AGENCY_DOMAIN = /talent|agency|outreach|influencer|creator|marketing|campaigns|pr$|pr\.|jiveprdigital|hireinfluence|mobiustalents|tsptalent|kora|inspiremarks|bulbatour|deppkeen|ahacreatorbrand|crevasse|hungrystudio/i;
+
+  const clean = (s) => (s || '').trim().replace(/^["'@#]+|["'.!?]+$/g, '').trim();
+
+  // 1. PRIORITY A — explicit brand markers in the subject (after stripping Fwd:)
+  const subj = (subject || '').replace(/^(Fwd|Re|FW):\s*/i, '').trim();
+  if (subj) {
+    const patterns = [
+      /\bwith\s+([A-Z][A-Za-z0-9&®™\.]+(?:\s+[A-Z][A-Za-z0-9&®™\.]+){0,3})/,    // "with Brand Name"
+      /\bfrom\s+([A-Z][A-Za-z0-9&®™\.]+(?:\s+[A-Z][A-Za-z0-9&®™\.]+){0,3})/,    // "from Brand"
+      /\bx\s+([A-Z][A-Za-z0-9&®™\.]+(?:\s+[A-Z][A-Za-z0-9&®™\.]+){0,3})/,        // "x Brand"
+      /^([A-Z][A-Za-z0-9&®™\.]+(?:\s+[A-Z][A-Za-z0-9&®™\.]+){0,3})\s*[:|—–-]/,   // "Brand:" or "Brand - X"
+      /\bfor\s+([A-Z][A-Za-z0-9&®™\.]+(?:\s+[A-Z][A-Za-z0-9&®™\.]+){0,3})/,      // "for Brand"
+      /\b(?:by|via)\s+([A-Z][A-Za-z0-9&®™\.]+(?:\s+[A-Z][A-Za-z0-9&®™\.]+){0,3})/,
+    ];
+    for (const re of patterns) {
+      const m = subj.match(re);
+      if (m) {
+        const candidate = clean(m[1]);
+        if (candidate.length >= 2 && !STOPWORDS.test(candidate.split(/\s+/)[0])) {
+          return candidate;
+        }
+      }
+    }
+    // Subject starts with an ALL-CAPS brand (HALARA, AMW, AEGISLAB) before a colon/dash
+    const caps = subj.match(/^([A-Z]{2,}(?:\s+[A-Z]{2,}){0,2})\b/);
+    if (caps) {
+      const candidate = clean(caps[1]);
+      if (!STOPWORDS.test(candidate.split(/\s+/)[0])) return candidate;
+    }
+  }
+
+  // 2. PRIORITY B — forwarded From: domain, but skip agency domains
+  if (isForward && body) {
+    const fromMatch = body.match(/From:\s*([^<\n]+?)\s*<([^>]+)>/i);
+    if (fromMatch) {
+      const fromEmail = fromMatch[2] || '';
+      const domain = fromEmail.split('@').pop().split('.').slice(0, -1).join('.');
+      const PERSONAL = /^(gmail|outlook|hotmail|yahoo|icloud|aol|proton(mail)?|live|me)$/i;
+      if (domain && !PERSONAL.test(domain) && !AGENCY_DOMAIN.test(domain)) {
+        const brandFromDomain = domain
+          .replace(/\.(co|com|io|net|org|ai|app|inc|llc|biz|us|uk|ca)$/i, '')
+          .split(/[.-]/)
+          .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+          .join(' ')
+          .trim();
+        if (brandFromDomain.length >= 3 && !STOPWORDS.test(brandFromDomain.split(/\s+/)[0])) {
+          return brandFromDomain;
+        }
+      }
+    }
+    // Body might have a "Subject:" line with the original brand-laden subject
+    const innerSubj = body.match(/Subject:\s*(?:Re:\s*)?([^\n]+)/i);
+    if (innerSubj) {
+      const innerExtracted = extractBrandFromInbound({ sender: '', subject: innerSubj[1], body: '' });
+      if (innerExtracted && innerExtracted !== 'Unknown' && innerExtracted.length >= 2) return innerExtracted;
+    }
+  }
+
+  // 3. PRIORITY C — clean subject and grab leading meaningful words
+  if (subj) {
+    const cleaned = subj
+      .replace(/\b(paid|collab|collaboration|opportunity|partnership|invitation|inquiry|request|tiktok|instagram|ig|reel|video|campaign|promotion|offer|inbound|brand|with|from|for|hi|hello|let'?s|looking|forward|to|your)\b/gi, ' ')
+      .replace(/@\w+/g, ' ')
+      .replace(/[|—–:]/g, ' ')
+      .replace(/[^A-Za-z0-9&®™\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (cleaned.length >= 3) {
+      const words = cleaned.split(/\s+/).filter(w => w.length > 1 && !STOPWORDS.test(w));
+      if (words.length) return words.slice(0, 3).join(' ');
+    }
+  }
+
+  // 4. PRIORITY D — sender display name (works for direct brand inbound,
+  // not Brian's forwards since the sender is just the forwarder there)
+  if (!isForward) {
+    const m = (sender || '').match(/^["']?([^<"']+?)["']?\s*<.+>/) || [null, (sender || '').split('@')[0]];
+    const fromSender = clean((m[1] || sender || ''));
+    if (fromSender && fromSender.length >= 2) return fromSender;
+  }
+
+  return 'Unknown';
+}
+
 // Inbox Pitches — unmatched brand emails that look like new deal pitches.
 // Returns threads where:
 //   - No deal_id linked
 //   - Subject contains pitch keywords OR last brand reply mentions partnership/$
 //   - Not dismissed by Riley
 //   - Last activity in last 30 days
-// For each, includes AI-classified creator guess (cooper/charlie) + brand name.
+// For each, includes AI-classified creator guess (cooper/charlie/brian) + brand name.
 route('GET', '/api/inbox-pitches', async (req, res, { url }) => {
   const force = url.searchParams.get('force') === '1';
   // SQLite doesn't ship REGEXP — use a bunch of LIKE OR's instead.
@@ -3569,7 +3899,7 @@ route('GET', '/api/inbox-pitches', async (req, res, { url }) => {
         }
         brand = brand.slice(0, 80);
         const slug = brand.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40);
-        const creator = r.pitch_creator && ['cooper','charlie'].includes(r.pitch_creator) ? r.pitch_creator : 'cooper';
+        const creator = r.pitch_creator && ['cooper','charlie','brian'].includes(r.pitch_creator) ? r.pitch_creator : 'cooper';
         const dealId = `${slug}-${creator}`;
         try {
           const exists = P.db().prepare(`SELECT id FROM deals WHERE id=?`).get(dealId);
@@ -3655,28 +3985,67 @@ route('GET', '/api/inbox-pitches', async (req, res, { url }) => {
   // If AI confidently classified a pitch as belonging to a creator Riley
   // doesn't manage (Beth, Amie, etc.), dismiss it so it never reappears.
   // Cooper + Charlie + unknown still flow through normally.
-  const MANAGED = new Set(['cooper','charlie','unknown']);
+  const MANAGED = new Set(['cooper','charlie','brian','unknown']);
+  // Per-creator agency blocklists — reps Riley/the creator has decided not to
+  // work with. Matched on sender or anywhere in the body (catches forwarded
+  // pitches where the rep's domain only appears in the inner From: line).
+  const CREATOR_AGENCY_BLOCKS = {
+    brian: [/tsptalent\.co\b/i, /\bTSP Talent\b/i],
+  };
   filtered = filtered.filter(r => {
     if (r.pitch_creator && !MANAGED.has(r.pitch_creator)) {
       P.db().prepare(`UPDATE threads SET pitch_dismissed_at=datetime('now') WHERE id=?`).run(r.thread_id);
       return false;
     }
+    const blocks = CREATOR_AGENCY_BLOCKS[r.pitch_creator];
+    if (blocks) {
+      const haystack = `${r.sender || ''}\n${r.subject || ''}\n${r.body || r.snippet || ''}`;
+      if (blocks.some(rx => rx.test(haystack))) {
+        P.db().prepare(`UPDATE threads SET pitch_dismissed_at=datetime('now') WHERE id=?`).run(r.thread_id);
+        return false;
+      }
+    }
     return true;
   });
 
-  // Strip quoted reply chains from bodies for display
+  // Strip quoted reply chains, then unwrap forwarded wrappers so Brian's
+  // bwallsocialmedia → riley forwards show the inner brand subject / sender /
+  // body instead of the "---------- Forwarded message ---------" boilerplate.
   json(res, filtered.map(r => {
-    let bodyClean = r.body || r.snippet || '';
-    if (bodyClean) { try { bodyClean = stripQuotedReply(bodyClean) || bodyClean; } catch {} }
-    bodyClean = bodyClean.slice(0, 600);
-    // Brand name from sender
-    const rawSender = r.sender || '';
-    const brandMatch = rawSender.match(/^["']?([^<"']+?)["']?\s*<.+>/) || [null, rawSender.split('@')[0]];
-    const brand = (brandMatch[1] || rawSender).trim();
+    // Unwrap forwards FIRST, then strip quoted-reply chains. (Order matters:
+    // stripQuotedReply treats inline "From: X" header lines as quote
+    // attribution and chops the actual brand message below them.)
+    const unwrapped = unwrapForwarded({
+      subject: r.subject || '',
+      sender: r.sender || '',
+      body: r.body || r.snippet || '',
+    });
+    let bodyInner = unwrapped.body || '';
+    if (bodyInner) { try { bodyInner = stripQuotedReply(bodyInner) || bodyInner; } catch {} }
+    // Clean URL noise from forwarded plain-text emails:
+    //   "*https://x* <https://x>"  →  "https://x"   (markdown italic + Gmail angle-wrap duplication)
+    //   "<https://x>"              →  "https://x"
+    //   "*https://x*"              →  "https://x"
+    bodyInner = bodyInner
+      .replace(/\*(https?:\/\/[^\s*<>]+)\*\s*<\1>/g, '$1')
+      .replace(/\*(https?:\/\/[^\s*<>]+)\*/g, '$1')
+      .replace(/<(https?:\/\/[^\s<>]+)>/g, '$1');
+    const bodyClean = bodyInner.slice(0, 600);
+    const brand = extractBrandFromInbound({
+      sender: unwrapped.sender,
+      subject: unwrapped.subject,
+      body: bodyClean,
+    });
+    // Per-creator exclusivity clash check — looks up the guessed category
+    // against the creator's existing exclusive partners (rate_card.json).
+    // Surfaces { brand, blocked_categories } when the inbound pitch would
+    // conflict with a long-term deal (e.g. supplements pitch for Brian
+    // clashes with his Perfect Sport deal).
+    const exclusivity_clash = exclusivityClashFor(r.pitch_creator, r.pitch_category);
     return {
       thread_id: r.thread_id,
-      subject: r.subject,
-      sender: rawSender,
+      subject: unwrapped.subject,
+      sender: unwrapped.sender,
       brand,
       body: bodyClean,
       brand_sent_at: r.brand_sent_at,
@@ -3684,6 +4053,7 @@ route('GET', '/api/inbox-pitches', async (req, res, { url }) => {
       age_hours: r.brand_sent_at ? Math.round((Date.now() - new Date(r.brand_sent_at).getTime()) / 3600000) : null,
       creator_guess: r.pitch_creator || null,
       category_guess: r.pitch_category || null,
+      exclusivity_clash,
     };
   }));
 });
@@ -3692,21 +4062,32 @@ route('GET', '/api/inbox-pitches', async (req, res, { url }) => {
 async function classifyPitch({ subject, sender, body, apiKey }) {
   const sys = `You read a brand email pitch and return JSON with which creator it's for.
 
-Roster:
-- COOPER SIMSON — 78K IG, niche: AI / SaaS / tools / B2B creator tech (Sintra, MiniMax, Higgsfield, GoMarble all sponsor him).
-- CHARLIE STRINGER — 306K IG + 233K TT, niche: outdoor / lifestyle / gear (Helinox, HOVERAir, Mirage, Wulcea sponsor him).
-- BETH — fitness/wellness (separate creator, NOT managed by this platform).
-- AMIE — fitness/dance.
+Roster (managed by this platform):
+- COOPER SIMSON — @cooper.simson, 78K IG. Niche: AI / SaaS / B2B creator tech.
+  Brands that pitch him: Sintra, MiniMax, Higgsfield, GoMarble, InVideo, Abacus,
+  Napkin, Combos, Velo, ZenBusiness, Hightouch, etc.
+- CHARLIE STRINGER — @charliestringer, 306K IG + 233K TT. Niche: outdoor /
+  lifestyle / gear. Brands: Helinox, HOVERAir, Mirage, Wulcea, Creed Media, etc.
+- BRIAN WALLACK — @brianwallack, bwallsocialmedia@gmail.com, 705K IG + 502K TT,
+  YouTube BWALL. Niche: BASKETBALL / sports / fitness / men's lifestyle /
+  productivity / male-skewing AI tools. If the email is forwarded from
+  bwallsocialmedia@gmail.com, that's ALWAYS Brian. Any mention of "Brian",
+  "Brian Wallack", "brianwallack", "BWALL", or basketball/sports/fitness =
+  Brian. Default to Brian for game-app/sportsbook/mens-fashion/supplement
+  pitches addressed to a generic email or to bwallsocialmedia.
 
-CLASSIFY BASED ON:
-- Brand category (AI tools → cooper, outdoor → charlie, fitness → beth/amie).
-- Subject/body mentions of @cooper, @charlie, etc.
-- Match the brand's niche to a creator's audience.
+Roster (NOT managed by this platform):
+- BETH, AMIE — surface creator="unknown" if pitched to them.
+
+CLASSIFY BASED ON, in this order:
+1. Forwarder/sender = bwallsocialmedia@gmail.com → ALWAYS brian.
+2. Explicit @handle or name mentions (@coopersimson, @charliestringer, @brianwallack).
+3. Brand niche match (AI tools→cooper, outdoor→charlie, basketball/sports/games/supplements→brian).
 
 OUTPUT (JSON only):
-{"creator": "cooper"|"charlie"|"beth"|"amie"|"unknown", "category": "ai_saas"|"outdoor"|"fitness"|"hydration"|"apparel"|"unknown", "confidence": "high"|"medium"|"low"}
+{"creator": "cooper"|"charlie"|"brian"|"unknown", "category": "ai_saas"|"outdoor"|"basketball"|"fitness"|"gaming"|"supplements"|"fashion"|"hydration"|"apparel"|"unknown", "confidence": "high"|"medium"|"low"}
 
-Be conservative — if you can't tell, return creator="unknown".`;
+Be conservative on cooper/charlie when basketball/sports signals are present — those should route to Brian. Return creator="unknown" only when you truly can't tell.`;
   const user = `Subject: ${subject || '(no subject)'}
 Sender: ${sender || 'unknown'}
 Body excerpt:
@@ -3735,7 +4116,7 @@ route('POST', '/api/inbox-pitches/([^/]+)/dismiss', async (req, res, { match }) 
 route('POST', '/api/inbox-pitches/([^/]+)/promote', async (req, res, { match }) => {
   const tid = decodeURIComponent(match[1]);
   const body = JSON.parse((await readBody(req)) || '{}');
-  if (!['cooper','charlie'].includes(body.creator_id))
+  if (!['cooper','charlie','brian'].includes(body.creator_id))
     return json(res, { ok:false, reason:'creator_id required (cooper|charlie)' }, 400);
   if (!body.brand) return json(res, { ok:false, reason:'brand required' }, 400);
   const slug = body.brand.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40);
@@ -3759,6 +4140,366 @@ route('POST', '/api/inbox-pitches/([^/]+)/promote', async (req, res, { match }) 
 });
 
 // ---- New Leads (unmatched contracts / e-sign envelopes with real $) --------
+// ============================================================================
+// TODAY'S WORK — cross-creator action queue with clock-aware modes.
+//
+// One unified queue that ranks every "needs Riley's attention" item across all
+// three creators, reordered by what day/time it is so the page energy matches
+// the actual work appropriate for the moment.
+//
+// Modes:
+//   weekday-grind   Mon–Fri 8am–7pm   full brand-facing queue
+//   winding-down    Mon–Fri 7pm+      same queue, "schedule for tomorrow" cue
+//   weekend-prep    Sat all + Sun <5pm  creator coordination, suppress cold outreach
+//   sunday-evening  Sun 5pm–11pm      cook for Monday morning (brand drafts encouraged)
+//
+// Sections (per mode, ordered):
+//   brand-reply     ball-in-court=us, brand sent last msg
+//   pitches         /api/inbox-pitches surface
+//   owed-this-week  /api/this-week deliverables on confirmed deals
+//   stale-follow-ups ball-on-them, >7d silent
+//
+// Items are normalized to a common shape so the client renders one row template
+// with a creator color pill + brand + headline + age + jump-to-action.
+// ============================================================================
+function detectWorkMode(now = new Date()) {
+  const day = now.getDay();   // 0=Sun … 6=Sat
+  const hour = now.getHours();
+  if (day === 6) return 'weekend-prep';
+  if (day === 0) return (hour >= 17 && hour < 23) ? 'sunday-evening' : 'weekend-prep';
+  if (hour >= 8 && hour < 19) return 'weekday-grind';
+  return 'winding-down';
+}
+function workModeHeader(mode, now) {
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const dayName = dayNames[now.getDay()];
+  let h = now.getHours(), m = now.getMinutes();
+  const ampm = h >= 12 ? 'pm' : 'am';
+  h = h % 12 || 12;
+  const time = `${h}:${String(m).padStart(2,'0')}${ampm}`;
+  if (mode === 'weekend-prep')   return { title: `${dayName} — creator prep`, subtitle: 'Brand outreach quieted till Monday — align with creators', time };
+  if (mode === 'sunday-evening') return { title: `${dayName} evening — cook for Monday`, subtitle: 'Brands open first thing tomorrow — drafts you send now land Monday morning', time };
+  if (mode === 'winding-down')   return { title: `${dayName} evening — winding down`, subtitle: 'Day is closing — replies will land tomorrow morning anyway', time };
+  return { title: `${dayName} — today's work`, subtitle: 'Everything across all three creators that needs you', time };
+}
+
+route('GET', '/api/todays-work', async (req, res) => {
+  const db = P.db();
+  const MANAGED = new Set(['cooper','charlie','brian']);
+  const now = new Date();
+  const mode = detectWorkMode(now);
+  const header = workModeHeader(mode, now);
+
+  // --- 1. Brand needs reply (ball on us, brand sent last) ------------------
+  const brandReplies = db.prepare(`
+    WITH ranked AS (
+      SELECT t.*, ROW_NUMBER() OVER (PARTITION BY t.deal_id ORDER BY t.last_message_at DESC) AS rn
+        FROM threads t
+       WHERE t.deal_id IS NOT NULL
+         AND t.ball_in_court = 'us'
+         AND t.last_message_by != 'us'
+    )
+    SELECT t.id AS thread_id, t.channel, t.subject, t.deal_id,
+           t.last_message_at,
+           d.brand, d.creator_id, d.fee_cents, d.ai_summary, d.next_action,
+           (SELECT m.snippet FROM messages m WHERE m.thread_id=t.id AND m.from_us=0
+              ORDER BY m.sent_at DESC LIMIT 1) AS last_snippet
+      FROM ranked t
+      JOIN deals d ON d.id = t.deal_id
+     WHERE t.rn = 1
+       AND d.state != 'lost'
+       AND d.funnel_stage != 'completed'
+     ORDER BY t.last_message_at ASC
+     LIMIT 100
+  `).all().filter(r => MANAGED.has(r.creator_id));
+
+  // --- 2. Pitches to triage (unmatched brand inbound) ----------------------
+  // Latest brand-message sender is on `messages`, not `threads`, so grab it
+  // via a correlated subquery so the row carries a usable "who pitched us".
+  const pitches = db.prepare(`
+    SELECT t.id AS thread_id, t.subject, t.last_snippet, t.last_message_at,
+           t.pitch_creator,
+           (SELECT m.sender FROM messages m
+              WHERE m.thread_id = t.id AND m.from_us = 0
+              ORDER BY m.sent_at DESC LIMIT 1) AS sender
+      FROM threads t
+     WHERE t.channel = 'email'
+       AND t.deal_id IS NULL
+       AND t.pitch_dismissed_at IS NULL
+       AND t.pitch_creator IN ('cooper','charlie','brian')
+     ORDER BY t.last_message_at DESC
+     LIMIT 100
+  `).all();
+
+  // --- 3. Stale follow-ups (ball on them >7d) ------------------------------
+  const followUps = db.prepare(`
+    SELECT t.id AS thread_id, t.channel, t.last_message_at,
+           d.id AS deal_id, d.brand, d.creator_id, d.fee_cents
+      FROM threads t
+      JOIN deals d ON d.id = t.deal_id
+     WHERE t.ball_in_court = 'them'
+       AND datetime(t.last_message_at) < datetime('now', '-7 days')
+       AND d.state IN ('open')
+       AND d.funnel_stage IN ('pitching','conversation','in_works')
+     ORDER BY t.last_message_at ASC
+     LIMIT 60
+  `).all().filter(r => MANAGED.has(r.creator_id));
+
+  // --- 4. Owed this week — confirmed deals with posting/script/raw deadlines
+  // Pull active in_works deals across creators where posting_date is within 7d.
+  const wkAhead = new Date(now.getTime() + 7 * 86400000).toISOString().slice(0,10);
+  const owedThisWeek = db.prepare(`
+    SELECT id AS deal_id, brand, creator_id, fee_cents, posting_date, funnel_stage, next_action
+      FROM deals
+     WHERE state IN ('open','won')
+       AND funnel_stage IN ('in_works','active')
+       AND posting_date IS NOT NULL
+       AND posting_date <= ?
+     ORDER BY posting_date ASC
+     LIMIT 40
+  `).all(wkAhead).filter(r => MANAGED.has(r.creator_id));
+
+  // --- 5. Scheduled to send — drafts queued for a future fire time ----------
+  const scheduledRows = db.prepare(`
+    SELECT s.id, s.scheduled_for, s.channel, s.body, s.deal_id,
+           d.brand, d.creator_id, d.fee_cents
+      FROM scheduled_sends s
+      LEFT JOIN deals d ON d.id = s.deal_id
+     WHERE s.status = 'pending'
+     ORDER BY s.scheduled_for ASC LIMIT 50
+  `).all().filter(r => !r.creator_id || MANAGED.has(r.creator_id));
+
+  // --- 6. Failed sends — worker tried to fire, brand send rejected. Riley acts.
+  const failedRows = db.prepare(`
+    SELECT s.id, s.scheduled_for, s.channel, s.body, s.error, s.deal_id, s.fired_at,
+           d.brand, d.creator_id, d.fee_cents
+      FROM scheduled_sends s
+      LEFT JOIN deals d ON d.id = s.deal_id
+     WHERE s.status = 'failed'
+     ORDER BY s.fired_at DESC LIMIT 20
+  `).all().filter(r => !r.creator_id || MANAGED.has(r.creator_id));
+
+  // --- Normalize every item to a uniform shape -----------------------------
+  const ageHours = (iso) => iso ? Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 3600000)) : null;
+  const item = (kind, creator, brand, headline, extra) => ({ kind, creator, brand, headline, ...extra });
+
+  const sections = {
+    'brand-reply': brandReplies.map(r => item('brand-reply', r.creator_id, r.brand,
+      (r.last_snippet || r.next_action || 'awaiting your reply').slice(0, 120),
+      { thread_id: r.thread_id, deal_id: r.deal_id, channel: r.channel,
+        age_hours: ageHours(r.last_message_at), fee_cents: r.fee_cents })),
+
+    'pitch': pitches.map(p => item('pitch', p.pitch_creator,
+      (p.sender || '').split('<')[0].trim() || p.subject || '(unmatched)',
+      (p.subject || '').slice(0, 120),
+      { thread_id: p.thread_id, age_hours: ageHours(p.last_message_at) })),
+
+    'owed-this-week': owedThisWeek.map(d => item('owed-this-week', d.creator_id, d.brand,
+      (d.next_action || `posting ${d.posting_date}`).slice(0, 120),
+      { deal_id: d.deal_id, due_date: d.posting_date, fee_cents: d.fee_cents })),
+
+    'stale-follow-up': followUps.map(f => item('stale-follow-up', f.creator_id, f.brand,
+      `silent ${Math.round(ageHours(f.last_message_at)/24)}d — nudge?`,
+      { thread_id: f.thread_id, deal_id: f.deal_id, channel: f.channel,
+        age_hours: ageHours(f.last_message_at), fee_cents: f.fee_cents })),
+
+    // Time-aware countdown — "in 2h 14m" / "today 8pm" / "Mon 9am"
+    'scheduled-send': scheduledRows.map(r => {
+      const when = new Date(r.scheduled_for);
+      const minsTo = Math.round((when.getTime() - Date.now()) / 60000);
+      let countdown;
+      if (minsTo < 60) countdown = `sends in ${Math.max(1, minsTo)}m`;
+      else if (minsTo < 24*60) countdown = `sends in ${Math.floor(minsTo/60)}h ${minsTo%60}m`;
+      else {
+        const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+        const h = when.getHours() % 12 || 12;
+        const ampm = when.getHours() >= 12 ? 'pm' : 'am';
+        countdown = `${dayNames[when.getDay()]} ${h}${ampm}`;
+      }
+      return item('scheduled-send', r.creator_id, r.brand || '(no deal)',
+        `${countdown} · ${(r.body||'').slice(0, 80).replace(/\s+/g,' ')}…`,
+        { sched_id: r.id, deal_id: r.deal_id, channel: r.channel,
+          fee_cents: r.fee_cents, scheduled_for: r.scheduled_for });
+    }),
+
+    'failed-send': failedRows.map(f => item('failed-send', f.creator_id, f.brand || '(no deal)',
+      `send failed: ${(f.error||'').slice(0, 80)}`,
+      { sched_id: f.id, deal_id: f.deal_id, channel: f.channel, fee_cents: f.fee_cents })),
+  };
+
+  // --- Mode-specific filters + section ordering ----------------------------
+  // Failed sends + scheduled sends are mode-independent — failures are always
+  // top-of-queue (you broke something, fix it); scheduled sits high so Riley
+  // can see what's about to fire and edit/cancel before it does.
+  let sectionOrder;
+  if (mode === 'weekend-prep') {
+    // Suppress cold pitches (low priority on weekend); only show brand replies
+    // where the brand sent something in the last 24h (active negotiation).
+    sections['brand-reply'] = sections['brand-reply'].filter(i => (i.age_hours ?? 999) <= 24);
+    sectionOrder = ['failed-send', 'brand-reply', 'scheduled-send', 'owed-this-week', 'stale-follow-up', 'pitch'];
+  } else if (mode === 'sunday-evening') {
+    // Sunday evening — cook for Monday. Brand-reply + pitches up front.
+    sectionOrder = ['failed-send', 'brand-reply', 'pitch', 'scheduled-send', 'owed-this-week', 'stale-follow-up'];
+  } else {
+    // weekday-grind + winding-down — full queue, replies first.
+    sectionOrder = ['failed-send', 'brand-reply', 'scheduled-send', 'owed-this-week', 'pitch', 'stale-follow-up'];
+  }
+
+  const TITLES = {
+    'brand-reply':     { emoji: '🔥', label: 'Brand needs reply' },
+    'pitch':           { emoji: '📨', label: 'Pitches to triage' },
+    'owed-this-week':  { emoji: '📦', label: 'Owed this week' },
+    'stale-follow-up': { emoji: '⏰', label: 'Stale follow-ups' },
+    'scheduled-send':  { emoji: '📤', label: 'Scheduled to send' },
+    'failed-send':     { emoji: '⚠️', label: 'Failed sends — needs you' },
+  };
+  const out = sectionOrder.map(id => ({
+    id,
+    emoji: TITLES[id].emoji,
+    label: TITLES[id].label,
+    count: sections[id].length,
+    items: sections[id],
+  }));
+  const totalActions = out.reduce((a, s) => a + s.count, 0);
+
+  json(res, {
+    mode,
+    now: now.toISOString(),
+    header: { ...header, total_actions: totalActions },
+    sections: out,
+  });
+});
+
+// ============================================================================
+// SCHEDULED SENDS (#141) — queue a cooked draft to fire later. The pattern:
+// Riley cooks a reply Sunday evening → picks "Schedule for Sun 8pm" → row goes
+// into scheduled_sends with status='pending' → a 60s worker tick fires the
+// send when scheduled_for <= now() → success drops the row from Today's Work,
+// failure surfaces it under ⚠️ Failed sends so Riley can intervene.
+// ============================================================================
+route('POST', '/api/scheduled-sends', async (req, res) => {
+  const b = JSON.parse((await readBody(req)) || '{}');
+  const { deal_id, draft_id, channel, body, scheduled_for, thread_id, to_addr } = b;
+  if (!deal_id || !channel || !body || !scheduled_for) {
+    return json(res, { error: 'deal_id, channel, body, scheduled_for required' }, 400);
+  }
+  if (!['email','whatsapp'].includes(channel)) {
+    return json(res, { error: `unknown channel "${channel}"` }, 400);
+  }
+  // Past dates → treat as "send next tick" (1 min out) so the worker picks it
+  // up but we don't sneak it into the past.
+  const when = new Date(scheduled_for);
+  if (isNaN(when.getTime())) return json(res, { error: 'invalid scheduled_for' }, 400);
+  const whenISO = when.toISOString();
+  const r = P.db().prepare(`
+    INSERT INTO scheduled_sends (scheduled_for, channel, deal_id, thread_id, draft_id, body, to_addr)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(whenISO, channel, deal_id, thread_id || null, draft_id || null, body, to_addr || null);
+  P.data.log({ who:'riley', action:'send_scheduled', deal_id,
+    summary: `→ scheduled for ${whenISO} (${channel})`, meta: { id: r.lastInsertRowid }});
+  json(res, { ok:true, id: r.lastInsertRowid, scheduled_for: whenISO });
+});
+
+route('GET', '/api/scheduled-sends', async (req, res, { url }) => {
+  const status = url.searchParams.get('status') || 'active'; // active|pending|failed|all
+  let where = "status IN ('pending','failed')";
+  if (status === 'pending') where = "status = 'pending'";
+  else if (status === 'failed') where = "status = 'failed'";
+  else if (status === 'all') where = '1=1';
+  const rows = P.db().prepare(`
+    SELECT s.*, d.brand, d.creator_id, d.fee_cents
+      FROM scheduled_sends s
+      LEFT JOIN deals d ON d.id = s.deal_id
+     WHERE ${where}
+     ORDER BY s.scheduled_for ASC
+     LIMIT 200
+  `).all();
+  json(res, rows);
+});
+
+route('POST', '/api/scheduled-sends/([0-9]+)/cancel', async (req, res, { match }) => {
+  const id = Number(match[1]);
+  const row = P.db().prepare(`SELECT * FROM scheduled_sends WHERE id=?`).get(id);
+  if (!row) return json(res, { error:'not found' }, 404);
+  if (row.status !== 'pending') return json(res, { error:`already ${row.status}` }, 400);
+  P.db().prepare(`UPDATE scheduled_sends SET status='canceled' WHERE id=?`).run(id);
+  P.data.log({ who:'riley', action:'send_canceled', deal_id: row.deal_id, summary:`#${id}` });
+  json(res, { ok:true });
+});
+
+route('POST', '/api/scheduled-sends/([0-9]+)/edit', async (req, res, { match }) => {
+  const id = Number(match[1]);
+  const b = JSON.parse((await readBody(req)) || '{}');
+  const row = P.db().prepare(`SELECT * FROM scheduled_sends WHERE id=?`).get(id);
+  if (!row) return json(res, { error:'not found' }, 404);
+  if (row.status !== 'pending') return json(res, { error:`already ${row.status}` }, 400);
+  const newBody = (b.body != null) ? b.body : row.body;
+  let newWhen = row.scheduled_for;
+  if (b.scheduled_for) {
+    const d = new Date(b.scheduled_for);
+    if (isNaN(d.getTime())) return json(res, { error:'invalid scheduled_for' }, 400);
+    newWhen = d.toISOString();
+  }
+  P.db().prepare(`UPDATE scheduled_sends SET body=?, scheduled_for=? WHERE id=?`).run(newBody, newWhen, id);
+  json(res, { ok:true, scheduled_for: newWhen });
+});
+
+// Worker — fires due sends. Reuses the same Gmail/WA path as /api/drafts/:id/approve.
+// On success: mark sent + log + invalidate AI summary + pull thread for freshness.
+// On fail: mark failed + record error. The UI surfaces failures so Riley can act.
+async function fireScheduledSend(row) {
+  const db = P.db();
+  if (row.channel === 'email') {
+    if (!hasGmailToken()) throw new Error('Gmail not connected');
+    const deal = P.data.getDeal(row.deal_id);
+    if (!deal) throw new Error('deal not found');
+    let subject = null, reply_to_msg_id = null;
+    if (row.draft_id) {
+      const draft = db.prepare(`SELECT * FROM drafts WHERE id=?`).get(row.draft_id);
+      if (draft) { subject = draft.subject; reply_to_msg_id = draft.reply_to_msg_id; }
+    }
+    if (!reply_to_msg_id) reply_to_msg_id = deal.latest_msg_id;
+    const sendRes = await sendThreadedReply({
+      thread_id: row.thread_id || deal.thread_id,
+      reply_to_msg_id,
+      to: row.to_addr || deal.contact_email,
+      subject,
+      body: row.body,
+      bcc: bccForCreator(deal.creator_id),
+    });
+    // Pull the thread so the just-sent message shows up locally without waiting
+    // on the next sync — matches the Approve & Send behavior.
+    try { await pullSingleThread(db, row.thread_id || deal.thread_id); } catch {}
+    try { db.prepare(`UPDATE deals SET ai_summary_for = NULL WHERE id = ?`).run(row.deal_id); } catch {}
+    return { sent_message_id: sendRes.id, to: sendRes.to };
+  }
+  // WhatsApp — fall through to the daemon. Not wired in this MVP; report.
+  throw new Error(`Send not yet wired for channel "${row.channel}"`);
+}
+async function scheduledSendsTick() {
+  const db = P.db();
+  const due = db.prepare(`
+    SELECT * FROM scheduled_sends
+     WHERE status = 'pending' AND scheduled_for <= datetime('now')
+     ORDER BY scheduled_for ASC LIMIT 20
+  `).all();
+  for (const row of due) {
+    try {
+      const result = await fireScheduledSend(row);
+      db.prepare(`UPDATE scheduled_sends SET status='sent', fired_at=datetime('now'), sent_message_id=? WHERE id=?`)
+        .run(result.sent_message_id || null, row.id);
+      P.data.log({ who:'system', action:'scheduled_send_fired', deal_id: row.deal_id,
+        summary: `#${row.id} → ${result.to || 'sent'}`, meta:{ message_id: result.sent_message_id }});
+    } catch (e) {
+      db.prepare(`UPDATE scheduled_sends SET status='failed', fired_at=datetime('now'), error=? WHERE id=?`)
+        .run(String(e.message || e).slice(0, 500), row.id);
+      P.data.log({ who:'system', action:'scheduled_send_failed', deal_id: row.deal_id,
+        summary: `#${row.id} → ${e.message || e}` });
+    }
+  }
+  return due.length;
+}
+
 // Surfaces inbound briefs/contracts that haven't been linked to a deal yet,
 // but only when there's a clear signal a real deal is brewing (fee >= $300).
 // Renders as a small tray under Active Deals so leads never slip.
@@ -3837,7 +4578,7 @@ route('POST', '/api/leads/(contract|esign)/([^/]+)/clash-check', async (req, res
   const [, kind, id] = match;
   const body = JSON.parse((await readBody(req)) || '{}');
   const creator = body.creator_id;
-  if (!['cooper','charlie'].includes(creator))
+  if (!['cooper','charlie','brian'].includes(creator))
     return json(res, { ok:false, reason:'creator_id required' }, 400);
 
   // Pull category + posting date from the lead's extraction
@@ -3927,7 +4668,7 @@ route('POST', '/api/leads/(contract|esign)/([^/]+)/dismiss', async (req, res, { 
 route('POST', '/api/leads/(contract|esign)/([^/]+)/promote', async (req, res, { match }) => {
   const [, kind, id] = match;
   const body = JSON.parse((await readBody(req)) || '{}');
-  if (!['cooper','charlie'].includes(body.creator_id))
+  if (!['cooper','charlie','brian'].includes(body.creator_id))
     return json(res, { ok:false, reason:'creator_id required (cooper|charlie)' }, 400);
   if (!body.brand) return json(res, { ok:false, reason:'brand required' }, 400);
 
@@ -3975,6 +4716,146 @@ route('POST', '/api/leads/(contract|esign)/([^/]+)/promote', async (req, res, { 
   json(res, { ok:true, deal });
 });
 
+// ============================================================================
+// GLOBAL SEARCH — searches across messages, threads, and deals so Riley can
+// answer "what did X say about Y?" without bouncing to Gmail. Pure SQL LIKE +
+// in-memory rank. Data is small enough (~thousands of rows) that this stays
+// under 50ms; FTS5 not needed until the messages table grows past 50k.
+//
+// Ranking tiers (lower = better):
+//   1. Subject hits on threads + deal-record hits (brand, contact)
+//   2. Message body hits
+// Within tier: most recent first. Cap at 30 results.
+//
+// Snippet extraction grabs ±80 chars around the match so the dropdown shows
+// the actual matched phrase in context, not a leading-clipped paragraph.
+// ============================================================================
+function extractSnippetAround(text, q, ctx = 80) {
+  if (!text) return '';
+  const lc = text.toLowerCase();
+  const i = lc.indexOf(q.toLowerCase());
+  if (i < 0) return text.slice(0, ctx * 2).replace(/\s+/g, ' ').trim();
+  const start = Math.max(0, i - ctx);
+  const end = Math.min(text.length, i + q.length + ctx);
+  return ((start > 0 ? '…' : '') + text.slice(start, end).replace(/\s+/g, ' ').trim() + (end < text.length ? '…' : ''));
+}
+
+route('GET', '/api/search', async (req, res, { url }) => {
+  const q = (url.searchParams.get('q') || '').trim();
+  if (!q || q.length < 2) return json(res, { q, hits: [] });
+  const db = P.db();
+  // SQL-escape LIKE special chars so user-typed % or _ don't blow up the query.
+  const safe = q.replace(/[\\%_]/g, c => '\\' + c);
+  const like = '%' + safe + '%';
+
+  // 1. Message body / snippet hits — joined to deal so we can show the brand.
+  // Include funnel_stage + state so the client can route to the correct tab
+  // (Today for in_works, Parked for dormant, Pitches for pitching, etc.).
+  const msgs = db.prepare(`
+    SELECT m.id AS msg_id, m.sender, m.from_us, m.sent_at, m.body, m.snippet,
+           t.id AS thread_id, t.channel, t.subject, t.deal_id,
+           d.brand, d.creator_id, d.funnel_stage, d.state
+      FROM messages m
+      JOIN threads t ON t.id = m.thread_id
+      LEFT JOIN deals d ON d.id = t.deal_id
+     WHERE (m.body LIKE ? ESCAPE '\\' OR m.snippet LIKE ? ESCAPE '\\')
+     ORDER BY m.sent_at DESC
+     LIMIT 40
+  `).all(like, like);
+
+  // 2. Thread subject / last_snippet hits — only ones whose threads weren't
+  // already returned above (de-dupe so the same thread doesn't double-appear).
+  const threadIdsSeen = new Set(msgs.map(m => m.thread_id));
+  const threads = db.prepare(`
+    SELECT t.id AS thread_id, t.subject, t.last_snippet, t.last_message_at, t.deal_id, t.channel,
+           d.brand, d.creator_id, d.funnel_stage, d.state
+      FROM threads t
+      LEFT JOIN deals d ON d.id = t.deal_id
+     WHERE (t.subject LIKE ? ESCAPE '\\' OR t.last_snippet LIKE ? ESCAPE '\\')
+     ORDER BY t.last_message_at DESC
+     LIMIT 40
+  `).all(like, like).filter(t => !threadIdsSeen.has(t.thread_id));
+
+  // 3. Deal record hits — brand name, contact, AI summary, next action.
+  const dealIdsSeen = new Set([...msgs, ...threads].map(x => x.deal_id).filter(Boolean));
+  const deals = db.prepare(`
+    SELECT id AS deal_id, brand, brand_key, creator_id, contact_name, contact_email,
+           ai_summary, next_action, funnel_stage, state, fee_cents, updated_at
+      FROM deals
+     WHERE brand LIKE ? ESCAPE '\\'
+        OR brand_key LIKE ? ESCAPE '\\'
+        OR contact_name LIKE ? ESCAPE '\\'
+        OR contact_email LIKE ? ESCAPE '\\'
+        OR ai_summary LIKE ? ESCAPE '\\'
+        OR next_action LIKE ? ESCAPE '\\'
+     ORDER BY updated_at DESC
+     LIMIT 40
+  `).all(like, like, like, like, like, like).filter(d => !dealIdsSeen.has(d.deal_id));
+
+  const hits = [];
+  for (const t of threads) {
+    hits.push({
+      kind: 'thread',
+      thread_id: t.thread_id, deal_id: t.deal_id,
+      brand: t.brand, creator: t.creator_id, channel: t.channel,
+      funnel_stage: t.funnel_stage, state: t.state,
+      sent_at: t.last_message_at,
+      subject: t.subject, snippet: extractSnippetAround(t.last_snippet || t.subject, q),
+      match_field: 'subject', _rank: 1,
+    });
+  }
+  for (const d of deals) {
+    hits.push({
+      kind: 'deal',
+      deal_id: d.deal_id,
+      brand: d.brand, creator: d.creator_id,
+      sent_at: d.updated_at,
+      subject: d.brand,
+      snippet: extractSnippetAround(d.ai_summary || d.next_action || d.contact_name || d.contact_email || d.brand, q),
+      match_field: 'deal', _rank: 1,
+      fee_cents: d.fee_cents, funnel_stage: d.funnel_stage, state: d.state,
+      contact: d.contact_name || d.contact_email,
+    });
+  }
+  for (const m of msgs) {
+    const who = m.from_us ? 'You' : (m.sender || '').split('<')[0].trim() || 'brand';
+    hits.push({
+      kind: 'message',
+      thread_id: m.thread_id, deal_id: m.deal_id,
+      brand: m.brand, creator: m.creator_id, channel: m.channel,
+      funnel_stage: m.funnel_stage, state: m.state,
+      sender: who, from_us: !!m.from_us, sent_at: m.sent_at,
+      subject: m.subject, snippet: extractSnippetAround(m.body || m.snippet, q),
+      match_field: 'body', _rank: 2,
+    });
+  }
+  // Dedupe by deal_id so multiple message-body matches inside the SAME deal
+  // (Higgsfield direct has 8 messages mentioning "higgsfield" → 8 rows) collapse
+  // to one row that says "+7 more matches." Different agencies on the same brand
+  // stay separate because they have distinct deal_ids. Threads without a deal
+  // dedupe by thread_id; rare brand-only deal matches dedupe by deal_id.
+  const groups = new Map();
+  for (const h of hits) {
+    const key = h.deal_id ? `deal:${h.deal_id}`
+              : h.thread_id ? `thread:${h.thread_id}`
+              : `unique:${Math.random()}`;
+    const existing = groups.get(key);
+    if (!existing) { groups.set(key, { best: h, count: 1 }); continue; }
+    existing.count++;
+    // Keep better-ranked, or more-recent on tie
+    const isBetter = h._rank < existing.best._rank
+      || (h._rank === existing.best._rank && (h.sent_at || '').localeCompare(existing.best.sent_at || '') > 0);
+    if (isBetter) existing.best = h;
+  }
+  const deduped = [...groups.values()].map(g => ({
+    ...g.best,
+    match_count: g.count,   // "5 matches in this conversation"
+  }));
+  // Final sort: tier 1 before tier 2; within tier, recent first.
+  deduped.sort((a, b) => (a._rank - b._rank) || ((b.sent_at || '').localeCompare(a.sent_at || '')));
+  json(res, { q, hits: deduped.slice(0, 30), total: deduped.length });
+});
+
 // ---- Notifications (auto-promote banner + undo) -----------------------------
 route('GET', '/api/notifications', async (req, res) => {
   const rows = listActiveNotifications({ db: P.db(), hours: 48 });
@@ -3991,6 +4872,154 @@ route('POST', '/api/notifications/([0-9]+)/dismiss', async (req, res, { match })
 });
 route('POST', '/api/notifications/([0-9]+)/undo', async (req, res, { match }) => {
   json(res, undoPromotion({ db: P.db(), notificationId: Number(match[1]) }));
+});
+
+// ---- "Needs you" feed -------------------------------------------------------
+// Cross-creator queue of "who's waiting on you right now":
+//   - Brand inbounds the classifier flagged requires_response=true that you
+//     haven't replied to yet (the deal is still open/active).
+//   - Creator WA messages (Cooper/Charlie) sent after your last reply AND
+//     after the manual read-watermark.
+// Sorted oldest-first so the most stale items rise to the top. Used by the
+// pinned "Needs you" group at the top of the topbar bell.
+route('GET', '/api/needs-you', async (req, res, { url }) => {
+  const creator = url.searchParams.get('creator') || null;  // optional filter
+  const items = [];
+
+  // -- 1. Brand inbounds requiring reply ------------------------------------
+  // For each active deal, find the most recent brand message where the
+  // classifier said requires_response=true AND there's no Riley outbound
+  // after it. Dedupe by deal_id so one row per deal regardless of how many
+  // brand messages stacked up.
+  const brandRows = P.db().prepare(`
+    WITH brand_msgs AS (
+      SELECT m.id, m.thread_id, m.sender, m.sent_at, m.body, m.snippet,
+             m.channel, m.classification,
+             d.id AS deal_id, d.brand, d.creator_id, d.state, d.funnel_stage
+      FROM messages m
+      JOIN threads t ON t.id = m.thread_id
+      JOIN deals d   ON d.thread_id = t.id
+      WHERE m.from_us = 0
+        AND m.classification IS NOT NULL
+        AND m.classification LIKE '%"requires_response":true%'
+        AND d.state IN ('open')
+        AND d.funnel_stage NOT IN ('completed', 'dropped')
+        AND d.managed_by IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM messages m2
+          WHERE m2.thread_id = m.thread_id
+            AND m2.from_us = 1
+            AND m2.sent_at > m.sent_at
+        )
+        ${creator ? "AND d.creator_id = ?" : ""}
+    )
+    SELECT * FROM brand_msgs
+    ORDER BY sent_at ASC
+  `).all(...(creator ? [creator] : []));
+  const seenDeals = new Set();
+  for (const r of brandRows) {
+    if (seenDeals.has(r.deal_id)) continue;
+    seenDeals.add(r.deal_id);
+    const ageH = r.sent_at ? Math.round((Date.now() - new Date(r.sent_at).getTime()) / 3600_000) : null;
+    items.push({
+      kind: 'brand_reply',
+      deal_id: r.deal_id,
+      brand: r.brand,
+      creator_id: r.creator_id,
+      channel: r.channel,
+      sender: (r.sender || '').split('<')[0].trim() || 'brand',
+      sent_at: r.sent_at,
+      age_hours: ageH,
+      snippet: (r.body || r.snippet || '').replace(/\s+/g, ' ').slice(0, 140),
+      stale: (ageH != null && ageH >= 4),
+    });
+  }
+
+  // -- 2. Creator WA inbounds (Cooper / Charlie / Brian) --------------------
+  // Anything from the creator since both (a) Riley's last reply in that thread
+  // AND (b) the manual read-watermark. Brian rarely uses WA so it'll usually
+  // be empty for him — Cooper/Charlie are the live ones.
+  const creators = creator ? [creator] : ['cooper', 'charlie', 'brian'];
+  for (const c of creators) {
+    const chatNameLike = `%${c.toUpperCase()} X TRIIBE%`;
+    const thread = P.db().prepare(`SELECT id, subject, read_through_at FROM threads
+      WHERE channel='whatsapp' AND subject LIKE ?
+      ORDER BY last_message_at DESC LIMIT 1`).get(chatNameLike);
+    if (!thread) continue;
+    const lastUsAt = P.db().prepare(`SELECT MAX(sent_at) m FROM messages
+      WHERE thread_id=? AND from_us=1`).get(thread.id).m;
+    const watermark = [lastUsAt, thread.read_through_at].filter(Boolean).sort().pop() || '1970-01-01';
+    const unread = P.db().prepare(`SELECT id, sender, sent_at, body, snippet FROM messages
+      WHERE thread_id=? AND from_us=0 AND sent_at > ?
+      ORDER BY sent_at ASC`).all(thread.id, watermark);
+    if (!unread.length) continue;
+    const first = unread[0];
+    const last  = unread[unread.length - 1];
+    const ageH = first.sent_at ? Math.round((Date.now() - new Date(first.sent_at).getTime()) / 3600_000) : null;
+    items.push({
+      kind: 'creator_message',
+      creator_id: c,
+      thread_id: thread.id,
+      count: unread.length,
+      sender: (first.sender || '').split('<')[0].trim() || c,
+      sent_at: first.sent_at,
+      last_sent_at: last.sent_at,
+      age_hours: ageH,
+      snippet: (last.body || last.snippet || '').replace(/\s+/g, ' ').slice(0, 140),
+      stale: (ageH != null && ageH >= 4),
+    });
+  }
+
+  // Sort oldest-first so the most-stale item lands at the top.
+  items.sort((a, b) => (a.sent_at || '').localeCompare(b.sent_at || ''));
+  json(res, { count: items.length, items });
+});
+
+// ---- Manual conversation log (Brian flow) ----------------------------------
+// Riley dictates a recap of a call/text with a brand contact for a deal where
+// the real channel lives offline (Brian's phone, in-person, etc.). We stamp
+// it into the deal's thread as a "manual" message so it shows up in the
+// conversation bubbles, feeds the AI summary/lifecycle engines, and gives the
+// classifier a real signal to work with on the next pass.
+route('POST', '/api/deals/([^/]+)/log-conversation', async (req, res, { match }) => {
+  const dealId = match[1];
+  let body = {};
+  try { body = JSON.parse(await readBody(req) || '{}'); } catch {}
+  const text = (body.text || '').toString().trim();
+  if (!text) return json(res, { error: 'empty' }, 400);
+  const deal = P.db().prepare(`SELECT id, brand, creator_id, thread_id FROM deals WHERE id=?`).get(dealId);
+  if (!deal) return json(res, { error: 'not found' }, 404);
+
+  // Default direction: brand → us, since Riley's typically recapping what the
+  // brand said. Override via body.from_us=true if he's logging his own outbound.
+  const fromUs = !!body.from_us;
+  const sender = fromUs
+    ? 'Riley (manual)'
+    : (body.sender || `${deal.brand} (manual)`);
+  const channel = body.channel || 'manual';
+  const now = new Date().toISOString();
+
+  // Create a thread if the deal doesn't have one — Brian deals often don't.
+  let threadId = deal.thread_id;
+  if (!threadId) {
+    threadId = `manual:${deal.id}`;
+    P.db().prepare(`INSERT OR IGNORE INTO threads
+      (id, channel, subject, last_message_at, ball_in_court)
+      VALUES (?, ?, ?, ?, ?)`).run(threadId, channel, `Manual log · ${deal.brand}`, now, fromUs ? 'them' : 'us');
+    P.db().prepare(`UPDATE deals SET thread_id=? WHERE id=?`).run(threadId, deal.id);
+  }
+  const msgId = `manual:${deal.id}:${Date.now()}`;
+  const hash  = `manual-${deal.id}-${Date.now()}`;
+  P.db().prepare(`INSERT INTO messages
+    (id, thread_id, channel, sender, from_us, sent_at, snippet, body, raw_hash)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(msgId, threadId, channel, sender, fromUs ? 1 : 0, now,
+         text.slice(0, 200), text, hash);
+  P.db().prepare(`UPDATE threads SET last_message_at=?, ball_in_court=? WHERE id=?`)
+    .run(now, fromUs ? 'them' : 'us', threadId);
+  P.db().prepare(`UPDATE deals SET last_activity_at=?, ball_in_court=?, updated_at=datetime('now') WHERE id=?`)
+    .run(now, fromUs ? 'them' : 'us', deal.id);
+  json(res, { ok: true, message_id: msgId, thread_id: threadId });
 });
 
 // ---- Intent preview + commit helpers ----------------------------------------
@@ -4195,6 +5224,74 @@ server.listen(PORT, () => {
     setInterval(warmForecast, 10 * 60 * 1000);
     console.log('  forecaster: cache pre-warmed, refresh every 10min');
   } catch (e) { console.warn('  forecaster boot err:', e.message); }
+
+  // Scheduled-sends worker (#141) — checks every 60s for drafts whose
+  // scheduled_for has passed, fires them via the same Gmail path as
+  // /api/drafts/:id/approve. Failures persist and surface in Today's Work.
+  try {
+    setInterval(() => { scheduledSendsTick().catch(e => console.warn('[sched-sends]', e.message)); }, 60 * 1000);
+    console.log('  scheduled-sends: worker tick every 60s');
+  } catch (e) { console.warn('  scheduled-sends boot err:', e.message); }
+
+  // WhatsApp daemon watchdog — kills the manual "Restart daemon" loop. Every
+  // 60s checks daemon health; auto-fires the same launchctl kickstart the UI
+  // restart button uses when the daemon is:
+  //   - unreachable (process dead or port not bound) → restart after 2 misses
+  //   - reachable but stale ≥STALE_THRESHOLD seconds → restart immediately
+  // Backoff between restarts prevents thrashing if Baileys can't reconnect;
+  // each restart logs to activity_log so Riley can see when self-heal fired.
+  try {
+    const STALE_THRESHOLD_SEC = 15 * 60;       // 15 min — matches the UI red-banner threshold
+    const MIN_RESTART_INTERVAL = 5 * 60_000;   // 5 min minimum between restarts
+    let consecutiveUnreachable = 0;
+    let lastRestartAt = 0;
+    const fireRestart = async (reason) => {
+      const now = Date.now();
+      if (now - lastRestartAt < MIN_RESTART_INTERVAL) return;  // backoff
+      lastRestartAt = now;
+      try {
+        const { exec } = await import('node:child_process');
+        await new Promise((resolve, reject) => {
+          exec(`launchctl kickstart -k gui/$(id -u)/com.triibe.platform.whatsapp`,
+            { timeout: 8000 }, (err) => err ? reject(err) : resolve());
+        });
+        P.data.log({ who:'system', action:'wa_watchdog_restart', summary: reason });
+        console.log('[wa-watchdog] restarted daemon —', reason);
+      } catch (e) {
+        P.data.log({ who:'system', action:'wa_watchdog_restart_failed', summary: e.message });
+        console.warn('[wa-watchdog] restart failed:', e.message);
+      }
+    };
+    setInterval(async () => {
+      try {
+        const r = await fetch('http://localhost:4745/status', { signal: AbortSignal.timeout(2500) });
+        if (!r.ok) {
+          consecutiveUnreachable++;
+          if (consecutiveUnreachable >= 2) {
+            await fireRestart(`unreachable for ${consecutiveUnreachable} consecutive checks`);
+            consecutiveUnreachable = 0;
+          }
+          return;
+        }
+        consecutiveUnreachable = 0;
+        const d = await r.json();
+        if (!d.ready) return;   // sign-in in progress, leave it alone
+        const lastMs = d.last_event_at ? new Date(d.last_event_at).getTime() : null;
+        if (!lastMs) return;     // no events yet — fresh daemon, skip
+        const staleSec = Math.floor((Date.now() - lastMs) / 1000);
+        if (staleSec >= STALE_THRESHOLD_SEC) {
+          await fireRestart(`stale ${Math.floor(staleSec/60)}min — last event ${d.last_event_at}`);
+        }
+      } catch (e) {
+        consecutiveUnreachable++;
+        if (consecutiveUnreachable >= 2) {
+          await fireRestart(`fetch failed × ${consecutiveUnreachable} (${e.message})`);
+          consecutiveUnreachable = 0;
+        }
+      }
+    }, 60 * 1000);
+    console.log('  wa-watchdog: auto-restart on stale ≥15min or unreachable ≥2 checks');
+  } catch (e) { console.warn('  wa-watchdog boot err:', e.message); }
   // Creator-chat propagator — bridges Cooper/Charlie WA chat updates to the
   // lifecycle audit + AI summary pipelines so "Sintra signed" in WA flows
   // through to that deal's pill without a manual nudge.

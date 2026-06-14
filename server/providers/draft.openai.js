@@ -265,7 +265,7 @@ Rules when discussing timing:
 export class OpenAIDraftProvider {
   constructor(db, spend) { this.db = db; this.spend = spend; }
 
-  async draft({ deal, latestMessage = null, mode = 'counter', customInstruction = null, threadHistory = [], waHistory = [] }) {
+  async draft({ deal, latestMessage = null, mode = 'counter', customInstruction = null, threadHistory = [], waHistory = [], postureAddendum = null }) {
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) throw new Error('OPENAI_API_KEY missing in .env');
 
@@ -309,7 +309,14 @@ export class OpenAIDraftProvider {
     if (!gate.ok) throw new Error('SpendGuard blocked draft: ' + gate.reason);
 
     const holds = loadHolds(this.db, deal.creator_id, deal.id);
-    const userPrompt = buildPrompt({ deal, latestMessage, mode, sug, customInstruction, threadHistory, waHistory, holds });
+    // Detect "we pushed back on rate without counter-numbering" — Riley said
+    // brand's $ is too low without naming a higher $ himself. Without this
+    // flag, the AI sees the brand's $ in the thread and the nudge mode's
+    // "restate existing offer" instruction and writes "we're good to go at
+    // $X" — capitulating to the brand's number. Lock the nudge to reinforce
+    // the pushback instead.
+    const pushback = detectUnpricedPushback(threadHistory);
+    const userPrompt = buildPrompt({ deal, latestMessage, mode, sug, customInstruction, threadHistory, waHistory, holds, pushback, postureAddendum });
     // Pull Riley's actual outbound voice samples and prepend to the system playbook
     const voiceSamples = loadVoiceSamples(this.db);
     const systemContent = PLAYBOOK + voiceSamples;
@@ -453,6 +460,72 @@ const MODE_INSTRUCTIONS = {
 //   3. From that message: max = standing anchor, min = explicit floor (if any)
 //
 // Sane $ band: $300 to $50,000 (filters phone numbers, promo codes, dates).
+// Detect "we rejected the brand's rate without naming a new number" — the
+// negotiation move where Riley says "$400 is below where Cooper prices these"
+// but stops short of countering with a specific figure (waiting for the brand
+// to bid against themselves). Without this flag, the nudge cook reads the
+// brand's $ in the thread and writes "we're good to go at $400" — capitulating
+// to the number Riley just rejected.
+//
+// Heuristic — Riley's MOST RECENT outbound must:
+//   1. Contain a "rate is too low" signal (below / under / lower than / less than
+//      / not workable / pricier / above / north of / standard / typically / floor
+//      / minimum / starting at / starts at / start at / can't / cannot do / not
+//      enough / push back / transparent though / honest with you)
+//   2. Have NO concrete $ counter-offer in the same message (anchor extractor
+//      handles that case separately)
+//   3. The brand's most recent prior $ figure becomes the "rejected_cents" so
+//      we can tell the AI "do NOT reference $X as accepted."
+function detectUnpricedPushback(threadHistory) {
+  if (!threadHistory || !threadHistory.length) return null;
+  // Find Riley's latest outbound message
+  let lastUsIdx = -1;
+  for (let i = threadHistory.length - 1; i >= 0; i--) {
+    if (threadHistory[i].from_us) { lastUsIdx = i; break; }
+  }
+  if (lastUsIdx === -1) return null;
+  let body = threadHistory[lastUsIdx].body || threadHistory[lastUsIdx].snippet || '';
+  if (threadHistory[lastUsIdx].channel === 'email' && body) {
+    try { body = stripQuotedReply(body) || body; } catch {}
+  }
+  if (!body) return null;
+  // Signal that Riley pushed back on a rate
+  const pushbackRe = /\b(below where|under (?:where|our)|lower than|less than|not (?:workable|enough)|standard|typically (?:prices|charges|sits|lands)|floor|minimum|starting at|starts? at|north of|above (?:our|where)|push(?:ed|ing)? back|transparent though|honest with you|short of|gap|too (?:low|tight|wide))\b/i;
+  if (!pushbackRe.test(body)) return null;
+  // Find the brand's most recent $ figure BEFORE Riley's pushback — that's
+  // the number we're rejecting.
+  let rejectedCents = null;
+  for (let i = lastUsIdx - 1; i >= 0; i--) {
+    const m = threadHistory[i];
+    if (m.from_us) continue;
+    let b = m.body || m.snippet || '';
+    if (m.channel === 'email' && b) {
+      try { b = stripQuotedReply(b) || b; } catch {}
+    }
+    const cents = [...(b || '').matchAll(/\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)(?!\d)/g)]
+      .map(x => Math.round(parseFloat(x[1].replace(/,/g,''))*100))
+      .filter(c => c >= 30_000 && c <= 5_000_000);
+    if (cents.length) { rejectedCents = Math.min(...cents); break; }
+  }
+  // Riley's $ figures in the pushback — only treat as a counter when STRICTLY
+  // HIGHER than what the brand offered. References to the brand's number
+  // ("$400 is below where Cooper prices these") are not counters, they're
+  // citations of what we're rejecting. If Riley's $ ≤ brand $, the pushback
+  // is real and we still want to fire the lock.
+  const ourCents = [...body.matchAll(/\$\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)(?!\d)/g)]
+    .map(x => Math.round(parseFloat(x[1].replace(/,/g,''))*100))
+    .filter(c => c >= 30_000 && c <= 5_000_000);
+  if (rejectedCents != null) {
+    const hasRealCounter = ourCents.some(c => c > rejectedCents);
+    if (hasRealCounter) return null;  // anchor extractor will handle it
+  } else if (ourCents.length) {
+    // No brand $ to compare against → any $ Riley named is presumed a real
+    // counter, so let the anchor extractor handle it.
+    return null;
+  }
+  return { rejected_cents: rejectedCents, pushback_excerpt: body.slice(0, 300) };
+}
+
 function extractRileyThreadAnchors(threadHistory) {
   if (!threadHistory || !threadHistory.length) return { max_cents: null, min_cents: null };
   // Newest-to-oldest scan of Riley's messages
@@ -492,7 +565,7 @@ function formatThread(history, label) {
   return `\n${label} (oldest → newest):\n${lines.join('\n')}\n`;
 }
 
-function buildPrompt({ deal, latestMessage, mode, sug, customInstruction = null, threadHistory = [], waHistory = [], holds = '' }) {
+function buildPrompt({ deal, latestMessage, mode, sug, customInstruction = null, threadHistory = [], waHistory = [], holds = '', pushback = null, postureAddendum = null }) {
   const creator = cap(deal.creator_id);
   const fee = sug.suggested_cents ? `$${(sug.suggested_cents/100).toLocaleString()}` : 'TBD';
   const floor = sug.floor_cents ? `$${(sug.floor_cents/100).toLocaleString()}` : '';
@@ -501,7 +574,10 @@ function buildPrompt({ deal, latestMessage, mode, sug, customInstruction = null,
   const NEEDS_PAYMENT_INFO = ['payment_followup', 'chase_payment', 'acknowledge_progress', 'request_signature'];
   const paymentBlock = NEEDS_PAYMENT_INFO.includes(mode) ? formatPaymentBlock(loadPaymentInfo()) : '';
   const ctx = `
-${modeNote}
+${postureAddendum ? `RILEY'S CHOSEN POSTURE FOR THIS REPLY (overrides default mode if they conflict):
+${postureAddendum}
+
+` : ''}${modeNote}
 ${paymentBlock}
 
 DEAL CONTEXT
@@ -532,7 +608,26 @@ THREAD AWARENESS (critical):
 - If brand wrote in non-USD currency (£/€/¥), reply in the SAME currency they used unless we've already established USD as the deal currency.
 - Don't ask for info we already have (their budget, scope, posting date) if the thread shows it.
 - If this is the first reply (no prior Riley message in thread), open by sharing our rate card breakdown — don't dance around it.
-${sug._thread_anchored ? `\nANCHOR LOCK: Riley has already anchored at $${(sug.anchor_cents/100).toLocaleString()} in this thread. DO NOT propose a number higher than this. Either restate this rate, restate the floor ($${(sug.floor_cents/100).toLocaleString()}), or hold without a new number.\n` : ''}`;
+${sug._thread_anchored ? `\nANCHOR LOCK: Riley has already anchored at $${(sug.anchor_cents/100).toLocaleString()} in this thread. DO NOT propose a number higher than this. Either restate this rate, restate the floor ($${(sug.floor_cents/100).toLocaleString()}), or hold without a new number.\n` : ''}
+${pushback ? `\n!!! RATE PUSHBACK LOCK — HARD CONSTRAINT !!!
+Riley's most recent outbound REJECTED the brand's rate${pushback.rejected_cents ? ` of $${(pushback.rejected_cents/100).toLocaleString()}` : ''} WITHOUT naming a new number. This is a deliberate negotiation move — he's making the brand bid against themselves. Your job is to reinforce that posture, NOT to break the silence with a counter.
+
+ZERO DOLLAR FIGURES. Do not write "$" anywhere in your reply. Do not write "k" after a number. Do not spell out a price ("fifteen hundred"). Do not name a "range" or "ballpark." If you include any $ amount, you have failed this task. The standard rate card has numbers in it — DO NOT USE THEM. This reply MUST be number-free.
+
+ALSO DO NOT:
+- Say "we're good to go at $${pushback.rejected_cents ? (pushback.rejected_cents/100).toLocaleString() : 'X'}" or any phrase that accepts the rate Riley just rejected
+- Reference the brand's last $ figure as agreed
+- Propose a cheaper/softer scope to make their number work
+- Walk back the pushback in any way
+- Concede ground; the entire purpose of this nudge is to keep the pressure on THEM
+
+WRITE INSTEAD:
+- 1-3 sentences. Friendly, low-pressure tone.
+- Frame as "circling back on the rate" / "any flexibility on the budget" / "did you get a chance to take it back to the team on the number" / "where you landed on the rate"
+- The ball is on THEM to come back with a better offer. Make that implicit.
+- Riley's actual pushback excerpt (for tone reference): "${(pushback.pushback_excerpt || '').slice(0, 200).replace(/\n+/g, ' ').replace(/"/g, "'")}"
+
+Before submitting, scan your reply for "$" — if you see one, rewrite without it.\n` : ''}`;
   return ctx;
 }
 

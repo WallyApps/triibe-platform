@@ -48,6 +48,20 @@ const pino = require('pino');
 const PORT = 4745;
 const PLATFORM_DB = '/Users/rileywallack/triibe-platform/data/triibe.db';
 
+// --- Crash hardening --------------------------------------------------------
+// Baileys throws async Boom errors from inside the WebSocket message handler
+// (group fetch timeouts, IQ query timeouts, etc) that aren't catchable at the
+// call site — they bubble up as unhandledRejection and kill the process. The
+// launchd watchdog will restart us, but each restart loses the WA WebSocket
+// state and triggers another reconnect race. Swallow these here and let
+// Baileys' own reconnect loop recover the socket.
+process.on('unhandledRejection', (err) => {
+  console.warn('[wa-baileys] unhandledRejection (suppressed):', err?.message || err);
+});
+process.on('uncaughtException', (err) => {
+  console.warn('[wa-baileys] uncaughtException (suppressed):', err?.message || err);
+});
+
 // Auth state: kept SEPARATE from the old whatsapp-web.js .wwebjs_auth dir so
 // the two daemons never conflict. First run Riley scans QR, subsequent boots
 // resume the session from disk.
