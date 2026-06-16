@@ -8,7 +8,6 @@ import { dirname, join, extname, normalize } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { loadEnv } from './env.js';
 import { providers, ensureInit } from './providers/index.js';
-import { checkAuth, isPublicPath, publicConfig } from './auth.js';
 import { computeClashes, canDo } from './engines/clash.js';
 import { suggestPrice } from './engines/pricing.js';
 import { checklistForDeal, antiMistakeReport, pickDraftMode, ITEMS as CHECKLIST_ITEMS } from './engines/checklist.js';
@@ -57,12 +56,6 @@ const routes = [];
 const route = (method, pat, handler) => routes.push({ method, re: new RegExp('^' + pat + '$'), handler });
 
 // ---- API routes -------------------------------------------------------------
-
-// Public bootstrap config for the browser supabase-js client (anon key is
-// public by design; no auth required so the login screen can load).
-route('GET', '/api/public-config', async (req, res) => {
-  json(res, publicConfig());
-});
 
 route('GET', '/api/health', async (req, res) => {
   const dcount = (await P.db().prepare('SELECT COUNT(*) c FROM deals').get()).c;
@@ -4180,12 +4173,6 @@ function serveStatic(req, res, pathname) {
 export async function handleRequest(req, res) {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
-    // Auth gate: protect /api/* (except public bootstrap + health). The SPA
-    // shell and static assets load unauthenticated so the login screen can render.
-    if (!isPublicPath(url.pathname)) {
-      const auth = await checkAuth(req);
-      if (!auth.ok) return json(res, { error: auth.error }, auth.status);
-    }
     for (const r of routes) {
       if (r.method !== req.method) continue;
       const m = url.pathname.match(r.re);
